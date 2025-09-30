@@ -755,7 +755,9 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Flask keepalive (not used for webhook, just optional) ---
 app = Flask(__name__)
-@app.get("/") def home(): return "OK"
+@app.get("/")
+def home():
+    return "OK"
 def run_keepalive(): app.run(host="0.0.0.0", port=int(os.getenv("PORT",8080)))
 
 # --- Main ---
