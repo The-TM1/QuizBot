@@ -8,6 +8,10 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
     PollAnswerHandler, ContextTypes, filters
 )
+from dotenv import load_dotenv
+
+# Load local .env file
+load_dotenv("secrets.env")
 
 # ---------- Config ----------
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
