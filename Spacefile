@@ -1,0 +1,12 @@
+v: 0
+micros:
+  - name: bot
+    src: .
+    engine: python3.10
+    primary: true
+    run: python3 main.py
+    env:
+      - BOT_TOKEN
+      - ADMIN_ID
+      - WEBHOOK_SECRET
+      - PUBLIC_URL
