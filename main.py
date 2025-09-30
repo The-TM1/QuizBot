@@ -1261,4 +1261,3 @@ if __name__ == "__main__":
 
     # POLLING mode
     application.run_polling(close_loop=False)
-```0
