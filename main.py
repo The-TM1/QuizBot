@@ -234,20 +234,25 @@ async def send_admin_alert(text: str, bot=None):
         pass
 
 def upsert_user(update: Update):
-    """Insert/update user. Returns True if NEW user."""
+    """Insert or update user info without chat_id column."""
     u = update.effective_user
-    c = update.effective_chat
-    if not u or not c: return False
-    existed = conn.execute("SELECT 1 FROM users WHERE user_id=?", (u.id,)).fetchone() is not None
-    conn.execute(
-        "INSERT INTO users(user_id,username,first_name,last_name,chat_id,last_seen) "
-        "VALUES(?,?,?,?,?,?) "
-        "ON CONFLICT(user_id) DO UPDATE SET "
-        "username=excluded.username, first_name=excluded.first_name, "
-        "last_name=excluded.last_name, chat_id=excluded.chat_id, last_seen=excluded.last_seen",
-        (u.id, u.username, u.first_name, u.last_name, c.id, int(time.time()))
-    )
-    conn.commit()
+    try:
+        conn.execute(
+            """
+            INSERT INTO users(user_id, username, first_name, last_name, joined_at, last_seen)
+            VALUES(?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=excluded.username,
+                first_name=excluded.first_name,
+                last_name=excluded.last_name,
+                last_seen=strftime('%s','now')
+            """,
+            (u.id, u.username, u.first_name, u.last_name),
+        )
+        conn.commit()
+    except sqlite3.OperationalError:
+        # recreate tables if schema mismatch
+        db_init()
     is_new = not existed
     if is_new and admin_ids_from_settings():
         total = conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
