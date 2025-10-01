@@ -809,18 +809,22 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
 
     elif act == "export":
-        await busy(q.message.chat, ChatAction.UPLOAD_DOCUMENT, secs=0.2)
-        path = "export_quizzes.json"
-        cur = conn.execute("SELECT * FROM quizzes ORDER BY id")
-        items = []
-        for r in cur.fetchall():
-            d = dict(r)
-            d["options"] = json.loads(r["options_json"])
-            d.pop("options_json", None)
-            items.append(d)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(items, f, ensure_ascii=False, indent=2)
-        await q.message.reply_document(InputFile(path, filename="quizzes.json"), caption="Backup exported.")
+    # Build JSON in memory and send as a real .json file
+    from io import BytesIO
+
+    await busy(q.message.chat, ChatAction.UPLOAD_DOCUMENT, secs=0.2)
+    cur = conn.execute("SELECT * FROM quizzes ORDER BY id")
+    items = []
+    for r in cur.fetchall():
+        d = dict(r)
+        d["options"] = json.loads(r["options_json"])
+        d.pop("options_json", None)
+        items.append(d)
+
+    data = json.dumps(items, ensure_ascii=False, indent=2).encode("utf-8")
+    bio = BytesIO(data)
+    bio.name = "quizzes.json"  # ensures Telegram sends with the right name
+    await q.message.reply_document(bio, caption="Backup exported.")
 
     elif act == "import":
         context.user_data["mode"] = "IMPORT"
