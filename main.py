@@ -233,10 +233,19 @@ async def send_admin_alert(text: str, bot=None):
     except Exception:
         pass
 
-def upsert_user(update: Update):
-    """Insert or update user info without chat_id column."""
+def upsert_user(update: Update) -> bool:
+    """
+    Insert or update a user row (schema: users[user_id, username, first_name, last_name, joined_at, last_seen]).
+    Returns True if this was a brand-new user, else False.
+    """
     u = update.effective_user
     try:
+        # Did the user already exist?
+        existed = conn.execute(
+            "SELECT 1 FROM users WHERE user_id=?", (u.id,)
+        ).fetchone() is not None
+
+        # Upsert without chat_id
         conn.execute(
             """
             INSERT INTO users(user_id, username, first_name, last_name, joined_at, last_seen)
@@ -250,6 +259,29 @@ def upsert_user(update: Update):
             (u.id, u.username, u.first_name, u.last_name),
         )
         conn.commit()
+
+        return not existed
+
+    except sqlite3.OperationalError:
+        # If schema mismatch happened, ensure tables exist and try again once
+        db_init()
+        existed = conn.execute(
+            "SELECT 1 FROM users WHERE user_id=?", (u.id,)
+        ).fetchone() is not None
+        conn.execute(
+            """
+            INSERT INTO users(user_id, username, first_name, last_name, joined_at, last_seen)
+            VALUES(?, ?, ?, ?, strftime('%s','now'), strftime('%s','now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=excluded.username,
+                first_name=excluded.first_name,
+                last_name=excluded.last_name,
+                last_seen=strftime('%s','now')
+            """,
+            (u.id, u.username, u.first_name, u.last_name),
+        )
+        conn.commit()
+        return not existed
     except sqlite3.OperationalError:
         # recreate tables if schema mismatch
         db_init()
