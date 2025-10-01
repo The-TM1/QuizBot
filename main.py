@@ -28,24 +28,15 @@ DEFAULT_OPEN_PERIOD = 30
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("quizbot")
 
-# ========== DB ==========
+# ---- DB ----
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 conn.row_factory = sqlite3.Row
 conn.execute("PRAGMA journal_mode=WAL;")
 
-def table_cols(table: str) -> set:
-    cur = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {r["name"] for r in cur}
-
-def add_col_if_missing(table: str, col: str, decl: str):
-    cols = table_cols(table)
-    if col not in cols:
-        log.info("DB migrate: adding %s.%s", table, col)
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl};")
-        conn.commit()
-
 def db_init():
     cur = conn.cursor()
+
+    # core tables
     cur.execute("CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users(
@@ -53,10 +44,21 @@ def db_init():
             username TEXT,
             first_name TEXT,
             last_name TEXT,
-            chat_id INTEGER,
-            last_seen INTEGER
+            joined_at INTEGER DEFAULT (strftime('%s','now')),
+            last_seen INTEGER DEFAULT (strftime('%s','now'))
         );
     """)
+    cur.execute("""CREATE TABLE IF NOT EXISTS admins(user_id INTEGER PRIMARY KEY);""")
+
+    # 🔧 missing table that caused your crash
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS bans(
+            user_id INTEGER PRIMARY KEY,
+            reason TEXT,
+            banned_at INTEGER DEFAULT (strftime('%s','now'))
+        );
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS quizzes(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,13 +90,13 @@ def db_init():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id INTEGER NOT NULL,
             quiz_id INTEGER NOT NULL,
+            idx INTEGER NOT NULL,
             poll_id TEXT,
             message_id INTEGER,
-            sent_at INTEGER,
             chosen INTEGER,
             is_correct INTEGER,
-            closed_at INTEGER,
-            idx INTEGER
+            sent_at INTEGER,
+            closed_at INTEGER
         );
     """)
     cur.execute("""
@@ -104,22 +106,27 @@ def db_init():
             user_id INTEGER NOT NULL
         );
     """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS admin_log(
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            admin_id INTEGER NOT NULL,
-            quiz_id INTEGER NOT NULL,
-            created_at INTEGER NOT NULL
-        );
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS banned(
-            user_id INTEGER PRIMARY KEY,
-            reason TEXT,
-            banned_at INTEGER,
-            banned_by INTEGER
-        );
-    """)
+
+    # ensure owner is always an admin
+    cur.execute("INSERT OR IGNORE INTO admins(user_id) VALUES(?)", (OWNER_ID,))
+    conn.commit()
+
+def is_banned(uid: int) -> bool:
+    """Return True if user is banned; safe even if schema was incomplete."""
+    try:
+        return conn.execute("SELECT 1 FROM bans WHERE user_id=?", (uid,)).fetchone() is not None
+    except sqlite3.OperationalError:
+        # if table didn’t exist yet, rebuild schema and treat as not banned
+        db_init()
+        return False
+
+def ban_user_id(uid: int, reason: str = None):
+    conn.execute("INSERT OR REPLACE INTO bans(user_id, reason, banned_at) VALUES(?,?,strftime('%s','now'))",
+                 (uid, reason))
+    conn.commit()
+
+def unban_user_id(uid: int):
+    conn.execute("DELETE FROM bans WHERE user_id=?", (uid,))
     conn.commit()
 
     # migrations
