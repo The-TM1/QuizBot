@@ -482,9 +482,12 @@ async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         log.error("begin_quiz_session error: %s\n%s", e, traceback.format_exc())
-        await q.message.reply_text("Couldn't start quiz due to an error. Please check your items and try again.")
-
-context.bot, sid)
+        try:
+            await q.message.reply_text(
+                "Couldn't start quiz due to an error. Please check your items and try again."
+            )
+        except Exception:
+            pass
 
 # ------------ Start sessions ------------
 # --- validate & collect quiz ids before starting (handles bad data safely) ---
