@@ -484,28 +484,55 @@ async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
         log.error("begin_quiz_session error: %s\n%s", e, traceback.format_exc())
         await q.message.reply_text("Couldn't start quiz due to an error. Please check your items and try again.")
 
+context.bot, sid)
+
 # ------------ Start sessions ------------
-async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
+# --- validate & collect quiz ids before starting (handles bad data safely) ---
+def _collect_valid_quiz_ids(subject: str, chapter: str, ai: bool):
+    sql = "SELECT id, question, options_json, correct, explanation FROM quizzes WHERE subject=? AND chapter=? AND "
+    sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
+    rows = conn.execute(sql, (subject, chapter)).fetchall()
+    valid = []
+    for r in rows:
+        try:
+            opts = json.loads(r["options_json"])
+            # reuse the same sanitizer the poll uses (lengths, min options, etc.)
+            _q, _opts, _expl = sanitize_for_poll(r["question"], opts, r["explanation"])
+            # ensure correct index still points inside the (possibly de-duplicated) options
+            if 0 <= int(r["correct"]) < len(_opts):
+                valid.append(int(r["id"]))
+        except Exception:
+            # skip bad quiz silently
+            continue
+    return valid
+
 async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
     try:
-        subj = context.user_data.get("subject"); chap = context.user_data.get("chapter")
+        subj = context.user_data.get("subject")
+        chap = context.user_data.get("chapter")
         if not subj or not chap:
-            await q.message.edit_text("Please choose Subject and Chapter first.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:start")]]))
+            await q.message.edit_text(
+                "Please choose Subject and Chapter first.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:start")]])
+            )
             return
         uid = q.from_user.id
         if is_user_banned(uid):
-            await q.message.edit_text("You are banned from using this bot.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
+            await q.message.edit_text(
+                "You are banned from using this bot.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
             return
         chat_id = q.message.chat.id
         op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
 
-        # ✅ validate quizzes up-front
+        # ✅ validate quizzes up-front (human-only)
         ids = _collect_valid_quiz_ids(subj, chap, ai=False)
         if not ids:
-            await q.message.edit_text("No valid quizzes found for this selection.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
+            await q.message.edit_text(
+                "No valid quizzes found for this selection.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
             return
         random.shuffle(ids)
 
@@ -515,12 +542,16 @@ async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["last_open_period"] = op
 
         conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
-        conn.execute("INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
-                     (uid, chat_id, len(ids), op, int(time.time()), "running"))
+        conn.execute(
+            "INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
+            (uid, chat_id, len(ids), op, int(time.time()), "running")
+        )
         sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         for i, qid in enumerate(ids):
-            conn.execute("INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
-                         (sid, qid, "", 0, i))
+            conn.execute(
+                "INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
+                (sid, qid, "", 0, i)
+            )
         conn.commit()
 
         await q.message.edit_text("Quiz started! 🎯")
@@ -528,19 +559,29 @@ async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         log.error("begin_quiz_session error: %s\n%s", e, traceback.format_exc())
-        await q.message.reply_text("Couldn't start quiz due to an error. Please check your items and try again.")
+        try:
+            await q.message.reply_text(
+                "Couldn't start quiz due to an error. Please check your items and try again."
+            )
+        except Exception:
+            pass
 
 async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
     try:
-        subj = context.user_data.get("ai_subject"); chap = context.user_data.get("ai_chapter")
+        subj = context.user_data.get("ai_subject")
+        chap = context.user_data.get("ai_chapter")
         if not subj or not chap:
-            await q.message.edit_text("Please choose Subject and Chapter first.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="uai:start")]]))
+            await q.message.edit_text(
+                "Please choose Subject and Chapter first.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="uai:start")]])
+            )
             return
         uid = q.from_user.id
         if is_user_banned(uid):
-            await q.message.edit_text("You are banned from using this bot.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
+            await q.message.edit_text(
+                "You are banned from using this bot.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
             return
         chat_id = q.message.chat.id
         op = int(context.user_data.get("ai_open_period", DEFAULT_OPEN_PERIOD))
@@ -548,18 +589,24 @@ async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
         # ✅ validate quizzes up-front (AI-only)
         ids = _collect_valid_quiz_ids(subj, chap, ai=True)
         if not ids:
-            await q.message.edit_text("No valid AI quizzes found for this selection.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
+            await q.message.edit_text(
+                "No valid AI quizzes found for this selection.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
             return
         random.shuffle(ids)
 
         conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
-        conn.execute("INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
-                     (uid, chat_id, len(ids), op, int(time.time()), "running"))
+        conn.execute(
+            "INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
+            (uid, chat_id, len(ids), op, int(time.time()), "running")
+        )
         sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         for i, qid in enumerate(ids):
-            conn.execute("INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
-                         (sid, qid, "", 0, i))
+            conn.execute(
+                "INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
+                (sid, qid, "", 0, i)
+            )
         conn.commit()
 
         await q.message.edit_text("AI Quiz started! 🤖🎯")
@@ -567,7 +614,12 @@ async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         log.error("begin_quiz_session_ai error: %s\n%s", e, traceback.format_exc())
-        await q.message.reply_text("Couldn't start AI quiz due to an error. Please check your items and try again.")
+        try:
+            await q.message.reply_text(
+                "Couldn't start AI quiz due to an error. Please check your items and try again."
+            )
+        except Exception:
+            pass
 
 # --- progress on answer; timer handled by fallback ---
 async def poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
