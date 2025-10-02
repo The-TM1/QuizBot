@@ -440,11 +440,9 @@ async def pre_quiz_screen_ai(q, context: ContextTypes.DEFAULT_TYPE):
                                [InlineKeyboardButton("⬅️ Back", callback_data="uai:timerback")]])
     await q.message.edit_text(txt, reply_markup=kb)
 
-# ------------ Start sessions ------------
 async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
     try:
-        subj = context.user_data.get("subject")
-        chap = context.user_data.get("chapter")
+        subj = context.user_data.get("subject"); chap = context.user_data.get("chapter")
         if not subj or not chap:
             await q.message.edit_text("Please choose Subject and Chapter first.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:start")]]))
@@ -457,26 +455,23 @@ async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
         chat_id = q.message.chat.id
         op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
 
-        context.user_data["last_subject"] = subj
-        context.user_data["last_chapter"] = chap
-        context.user_data["last_open_period"] = op
-
-        rows = conn.execute(
-            "SELECT id FROM quizzes WHERE subject=? AND chapter=? AND COALESCE(ai_generated,0)=0",
-            (subj, chap)
-        ).fetchall()
-        ids = [r[0] for r in rows]
+        # ✅ validate quizzes up-front
+        ids = _collect_valid_quiz_ids(subj, chap, ai=False)
         if not ids:
-            await q.message.edit_text("No quizzes found for this selection.",
+            await q.message.edit_text("No valid quizzes found for this selection.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
             return
         random.shuffle(ids)
+
+        # save for retry
+        context.user_data["last_subject"] = subj
+        context.user_data["last_chapter"] = chap
+        context.user_data["last_open_period"] = op
 
         conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
         conn.execute("INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
                      (uid, chat_id, len(ids), op, int(time.time()), "running"))
         sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
         for i, qid in enumerate(ids):
             conn.execute("INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
                          (sid, qid, "", 0, i))
@@ -487,17 +482,57 @@ async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         log.error("begin_quiz_session error: %s\n%s", e, traceback.format_exc())
-        try:
-            for aid in admin_ids_from_settings():
-                await context.bot.send_message(aid, f"[Admin alert] begin_quiz_session error: {e}")
-            await q.message.reply_text("Couldn't start quiz due to an error. Please try again.")
-        except Exception:
-            pass
+        await q.message.reply_text("Couldn't start quiz due to an error. Please check your items and try again.")
+
+# ------------ Start sessions ------------
+async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
+async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        subj = context.user_data.get("subject"); chap = context.user_data.get("chapter")
+        if not subj or not chap:
+            await q.message.edit_text("Please choose Subject and Chapter first.",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:start")]]))
+            return
+        uid = q.from_user.id
+        if is_user_banned(uid):
+            await q.message.edit_text("You are banned from using this bot.",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
+            return
+        chat_id = q.message.chat.id
+        op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
+
+        # ✅ validate quizzes up-front
+        ids = _collect_valid_quiz_ids(subj, chap, ai=False)
+        if not ids:
+            await q.message.edit_text("No valid quizzes found for this selection.",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
+            return
+        random.shuffle(ids)
+
+        # save for retry
+        context.user_data["last_subject"] = subj
+        context.user_data["last_chapter"] = chap
+        context.user_data["last_open_period"] = op
+
+        conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
+        conn.execute("INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
+                     (uid, chat_id, len(ids), op, int(time.time()), "running"))
+        sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for i, qid in enumerate(ids):
+            conn.execute("INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
+                         (sid, qid, "", 0, i))
+        conn.commit()
+
+        await q.message.edit_text("Quiz started! 🎯")
+        await send_next_quiz(context.bot, sid)
+
+    except Exception as e:
+        log.error("begin_quiz_session error: %s\n%s", e, traceback.format_exc())
+        await q.message.reply_text("Couldn't start quiz due to an error. Please check your items and try again.")
 
 async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
     try:
-        subj = context.user_data.get("ai_subject")
-        chap = context.user_data.get("ai_chapter")
+        subj = context.user_data.get("ai_subject"); chap = context.user_data.get("ai_chapter")
         if not subj or not chap:
             await q.message.edit_text("Please choose Subject and Chapter first.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="uai:start")]]))
@@ -510,13 +545,10 @@ async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
         chat_id = q.message.chat.id
         op = int(context.user_data.get("ai_open_period", DEFAULT_OPEN_PERIOD))
 
-        rows = conn.execute(
-            "SELECT id FROM quizzes WHERE subject=? AND chapter=? AND ai_generated=1",
-            (subj, chap)
-        ).fetchall()
-        ids = [r[0] for r in rows]
+        # ✅ validate quizzes up-front (AI-only)
+        ids = _collect_valid_quiz_ids(subj, chap, ai=True)
         if not ids:
-            await q.message.edit_text("No AI quizzes found for this selection.",
+            await q.message.edit_text("No valid AI quizzes found for this selection.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
             return
         random.shuffle(ids)
@@ -532,8 +564,10 @@ async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
 
         await q.message.edit_text("AI Quiz started! 🤖🎯")
         await send_next_quiz(context.bot, sid)
+
     except Exception as e:
         log.error("begin_quiz_session_ai error: %s\n%s", e, traceback.format_exc())
+        await q.message.reply_text("Couldn't start AI quiz due to an error. Please check your items and try again.")
 
 # --- progress on answer; timer handled by fallback ---
 async def poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1313,21 +1347,47 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # broadcast
+    # broadcast (two-step: preview then confirm)
     if mode == "BROADCAST_ENTER" and update.message and update.message.text:
         if not is_owner(uid):
-            await notify_owner_unauthorized(context.bot, uid, "BROADCAST_ENTER"); return
-        txt = update.message.text
+            await notify_owner_unauthorized(context.bot, uid, "BROADCAST_ENTER")
+            context.user_data["mode"] = None
+            return
+        draft = update.message.text
+        context.user_data["broadcast_draft"] = draft
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Confirm broadcast", callback_data="a:bcast_confirm")],
+            [InlineKeyboardButton("⬅️ Cancel", callback_data="a:bcast_cancel")]
+        ])
+        await update.message.reply_text(f"*Broadcast preview:*\n\n{draft}", parse_mode="Markdown", reply_markup=kb)
+        context.user_data["mode"] = None
+        return
+
+    # --- broadcast confirm/cancel ---
+    if act == "bcast_confirm":
+        draft = context.user_data.get("broadcast_draft")
+        if not draft:
+            await q.message.edit_text("No broadcast draft to send.",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            return
         rows = conn.execute("SELECT chat_id FROM users").fetchall()
         ok = 0
         for r in rows:
             try:
                 if r["chat_id"]:
-                    await context.bot.send_message(r["chat_id"], txt)
+                    await context.bot.send_message(r["chat_id"], draft)
                     ok += 1
             except Exception:
                 pass
-        await update.message.reply_text(f"Broadcasted to {ok} users.")
-        context.user_data["mode"] = None
+        context.user_data["broadcast_draft"] = None
+        await q.message.edit_text(f"✅ Broadcasted to {ok} users.",
+                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        return
+
+    if act == "bcast_cancel":
+        context.user_data["broadcast_draft"] = None
+        await q.message.edit_text("❌ Broadcast cancelled.",
+                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
     # contact admin → owner only
