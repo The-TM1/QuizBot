@@ -116,6 +116,8 @@ def db_init():
     _add_col("sessions", "finished_at", "INTEGER")
 
 # ------------ Helpers ------------
+pending_contact = {}
+
 async def busy(chat, action=ChatAction.TYPING, secs=0.25):
     await asyncio.sleep(secs)
 
