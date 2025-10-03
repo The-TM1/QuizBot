@@ -116,6 +116,9 @@ def db_init():
     _add_col("sessions", "finished_at", "INTEGER")
 
 # ------------ Helpers ------------
+# --- compatibility fix for Contact Admin (works around user_data scope issues) ---
+contact_admin_mode = {}
+
 async def busy(chat, action=ChatAction.TYPING, secs=0.25):
     await asyncio.sleep(secs)
 
@@ -1539,7 +1542,9 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # contact admin → owner only
-    if mode == "CONTACT_ADMIN" and update.message:
+    # Accept either the user_data mode OR the compatibility dict marker (some callback/message transitions
+    # may not always share user_data in some contexts — the dict ensures robustness).
+    if (mode == "CONTACT_ADMIN" or contact_admin_mode.get(uid)) and update.message:
         u = update.effective_user
         header = f"📨 Message to owner from {_uname_row({'username': u.username, 'first_name': u.first_name, 'last_name': u.last_name, 'user_id': u.id})} (id:{u.id}):"
         try:
@@ -1547,12 +1552,15 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.copy_message(chat_id=OWNER_ID,
                                            from_chat_id=update.message.chat.id,
                                            message_id=update.message.message_id)
-        except Exception:
+            except Exception:
             pass
+        # clear both markers
         context.user_data["mode"] = None
+        contact_admin_mode.pop(uid, None)
         await update.message.reply_text("✅ Your message has been sent to the owner.",
                                         reply_markup=main_menu(u.id))
         return
+
 
     # admins add subject/chapter by text
     if mode == "NEW_SUBJECT" and update.message and update.message.text:
@@ -1646,8 +1654,11 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await leaderboard(q, page=int(data.split(":")[2])); return
     if data == "u:contact":
         context.user_data["mode"] = "CONTACT_ADMIN"
+        # Also set the small dict marker so the subsequent message handler will always detect this intent.
+        contact_admin_mode[uid] = True
         await q.message.edit_text("Type your message for the owner:",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])); return
+
 
     # start quiz (human)
     if data == "u:start": await user_subjects(update); return
