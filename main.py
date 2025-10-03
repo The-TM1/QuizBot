@@ -384,6 +384,99 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Use /stop to cancel anytime."
     )
 
+# ------------ User flow: Subjects & Chapters (Human + AI) ------------
+async def user_subjects(update: Update, page: int = 0):
+    uid = update.effective_user.id if update.effective_user else update.callback_query.from_user.id
+    subs = list_subjects_with_counts(ai_only=False)
+    if not subs:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+        await edit_or_reply(update, "No subjects added yet.", kb)
+        return
+    pages = max(1, ceil(len(subs) / PAGE_SIZE))
+    page = max(0, min(page, pages - 1))
+    slice_ = subs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+    rows = [[InlineKeyboardButton(f"📚 {s} (chapters: {chs} | quizzes: {qs})", callback_data=f"u:subj:{s}")]
+            for (s, chs, qs) in slice_]
+    if pages > 1:
+        nav = []
+        if page > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"u:subjp:{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data="noop"))
+        if page < pages - 1: nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"u:subjp:{page+1}"))
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="u:back")])
+    await edit_or_reply(update, "Home › Subjects\n\nChoose a subject:", InlineKeyboardMarkup(rows))
+
+async def user_chapters(update: Update, subject: str, page: int = 0):
+    # store chosen subject for later steps
+    if isinstance(update, Update):
+        ctx_user_data = (await update.get_bot())._application.user_data  # not used; we use callback path instead
+    # put into callback context via button handler; we still set it here for safety
+    try:
+        # If this was called from btn(), context.user_data is already set.
+        pass
+    except Exception:
+        pass
+    chs = list_chapters_with_counts(subject, ai_only=False)
+    if not chs:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:startback")]])
+        await edit_or_reply(update, f"No chapters found in *{subject}*.", kb, parse_mode="Markdown")
+        return
+    pages = max(1, ceil(len(chs) / PAGE_SIZE))
+    page = max(0, min(page, pages - 1))
+    slice_ = chs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+    rows = [[InlineKeyboardButton(f"📖 {c} (quizzes: {qs})", callback_data=f"u:chap:{c}")]
+            for (c, qs) in slice_]
+    if pages > 1:
+        nav = []
+        if page > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"u:chpp:{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data="noop"))
+        if page < pages - 1: nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"u:chpp:{page+1}"))
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="u:startback")])
+    await edit_or_reply(update, f"Home › Subjects › *{subject}*\n\nChoose a chapter:",
+                        InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+async def user_subjects_ai(update: Update, page: int = 0):
+    subs = list_subjects_with_counts(ai_only=True)
+    if not subs:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+        await edit_or_reply(update, "No AI-generated subjects available.", kb)
+        return
+    pages = max(1, ceil(len(subs) / PAGE_SIZE))
+    page = max(0, min(page, pages - 1))
+    slice_ = subs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+    rows = [[InlineKeyboardButton(f"🤖 {s} (chapters: {chs} | quizzes: {qs})", callback_data=f"uai:subj:{s}")]
+            for (s, chs, qs) in slice_]
+    if pages > 1:
+        nav = []
+        if page > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"uai:subjp:{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data="noop"))
+        if page < pages - 1: nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"uai:subjp:{page+1}"))
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="u:back")])
+    await edit_or_reply(update, "AI Gen › Subjects\n\nChoose a subject:", InlineKeyboardMarkup(rows))
+
+async def user_chapters_ai(update: Update, subject: str, page: int = 0):
+    chs = list_chapters_with_counts(subject, ai_only=True)
+    if not chs:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="uai:startback")]])
+        await edit_or_reply(update, f"No chapters found in *{subject}*.", kb, parse_mode="Markdown")
+        return
+    pages = max(1, ceil(len(chs) / PAGE_SIZE))
+    page = max(0, min(page, pages - 1))
+    slice_ = chs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+    rows = [[InlineKeyboardButton(f"📖 {c} (quizzes: {qs})", callback_data=f"uai:chap:{c}")]
+            for (c, qs) in slice_]
+    if pages > 1:
+        nav = []
+        if page > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"uai:chpp:{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data="noop"))
+        if page < pages - 1: nav.append(InlineKeyboardButton("Next ▶️", callback_data=f"uai:chpp:{page+1}"))
+        rows.append(nav)
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="uai:startback")])
+    await edit_or_reply(update, f"AI Gen › Subjects › *{subject}*\n\nChoose a chapter:",
+                        InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
 # ------------ UI helpers ------------
 async def edit_or_reply(obj, text, markup=None, **kwargs):
     if hasattr(obj, "callback_query") and obj.callback_query:
