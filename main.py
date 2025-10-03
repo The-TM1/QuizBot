@@ -1504,8 +1504,8 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         draft = update.message.text
         context.user_data["broadcast_draft"] = draft
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Confirm broadcast", callback_data="a:bcast_confirm")],
-            [InlineKeyboardButton("⬅️ Cancel", callback_data="a:bcast_cancel")]
+            [InlineKeyboardButton("✅ Confirm broadcast", callback_data="bcast_confirm")],
+            [InlineKeyboardButton("⬅️ Cancel", callback_data="bcast_cancel")]
         ])
         await update.message.reply_text(f"*Broadcast preview:*\n\n{draft}", parse_mode="Markdown", reply_markup=kb)
         context.user_data["mode"] = None
