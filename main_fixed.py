@@ -1552,7 +1552,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.copy_message(chat_id=OWNER_ID,
                                            from_chat_id=update.message.chat.id,
                                            message_id=update.message.message_id)
-            except Exception:
+        except Exception:
             pass
         # clear both markers
         context.user_data["mode"] = None
