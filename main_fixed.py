@@ -1543,7 +1543,6 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # contact admin → owner only
     # Accept either the user_data mode OR the compatibility dict marker (some callback/message transitions
     # may not always share user_data in some contexts — the dict ensures robustness).
-    pending_contact = {}
     if pending_contact.get(uid) and update.message:
         u = update.effective_user
         header = f"📨 Message to owner from {_uname_row({'username': u.username, 'first_name': u.first_name, 'last_name': u.last_name, 'user_id': u.id})} (id:{u.id}):"
