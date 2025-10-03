@@ -1512,23 +1512,33 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # --- broadcast confirm/cancel ---
-    if act == "bcast_confirm":
-        draft = context.user_data.get("broadcast_draft")
-        if not draft:
-            await q.message.edit_text("No broadcast draft to send.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
-            return
-        rows = conn.execute("SELECT chat_id FROM users").fetchall()
-        ok = 0
-        for r in rows:
+    if act == "bcastconfirm":
+    draft = context.userdata.get("broadcastdraft")
+    if not draft:
+        await q.message.edittext("No broadcast draft to send.",
+                                  replymarkup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callbackdata="a:panel")]]))
+        return
+    rows = conn.execute("SELECT chatid FROM users").fetchall()
+    ok = 0
+    for r in rows:
+        try:
+            # Robustly extract chatid for both dict-like and tuple-like rows
+            chatid = None
             try:
-                if r["chat_id"]:
-                    await context.bot.send_message(r["chat_id"], draft)
-                    ok += 1
+                chatid = r"chat_id"
             except Exception:
-                pass
-        context.user_data["broadcast_draft"] = None
-        await q.message.edit_text(f"✅ Broadcasted to {ok} users.",
+                try:
+                    chatid = r[0]
+                except Exception:
+                    chatid = None
+
+            if chatid:
+                await context.bot.sendmessage(chatid, draft)
+                ok += 1
+        except Exception:
+            pass
+    context.userdata"broadcast_draft" = None
+    await q.message.edit_text(f"✅ Broadcasted to {ok} users.",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
