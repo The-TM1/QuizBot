@@ -1767,4 +1767,5 @@ if __name__ == "__main__":
     app_.add_handler(PollAnswerHandler(poll_answer))
     # One handler is enough; we branch on mode (text, poll, document)
     app_.add_handler(MessageHandler(filters.ALL, text_or_poll))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_or_poll))
     app_.run_polling()
