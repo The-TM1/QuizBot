@@ -1553,7 +1553,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         except Exception:
             pass
-        context.user_data["mode"] = None
+        context.chat_data["mode"] = None
         await update.message.reply_text(
             "✅ Your message has been sent to the owner.",
             reply_markup=main_menu(u.id)
@@ -1651,7 +1651,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("u:lbp:"):
         await leaderboard(q, page=int(data.split(":")[2])); return
     if data == "u:contact":
-        context.user_data["mode"] = "CONTACT_ADMIN"
+        context.chat_data["mode"] = "CONTACT_ADMIN"
         await q.message.edit_text(
             "Type your message for the owner:",
             reply_markup=InlineKeyboardMarkup(
