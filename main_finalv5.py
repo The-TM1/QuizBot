@@ -908,6 +908,9 @@ async def leaderboard(q, page=0):
 # ------------ /delquiz with confirmation ------------
 async def delquiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    if not (is_owner(uid) or is_admin(uid)):
+        await update.message.reply_text("Admin only")
+        return
     if not context.args:
         await update.message.reply_text("Usage: /delquiz <quiz_id>")
         return
@@ -938,6 +941,9 @@ async def delquiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------ /delquiz_ai with confirmation (for AI quizzes) ------------
 async def delquiz_ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    if not (is_owner(uid) or is_admin(uid)):
+        await update.message.reply_text("Admin only")
+        return
     if not context.args:
         await update.message.reply_text("Usage: /delquiz_ai <quiz_id>")
         return
