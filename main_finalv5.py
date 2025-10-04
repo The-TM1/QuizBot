@@ -120,7 +120,6 @@ def db_init():
 pending_contact = {}
 
 # Add this in the "Helpers" section after the existing functions
-
 def _collect_valid_quiz_ids_all_subjects_mixed(ai: bool):
     """Collect quiz IDs from all subjects (mixed)"""
     sql = "SELECT id, question, options_json, correct, explanation FROM quizzes WHERE "
@@ -709,7 +708,7 @@ async def begin_quiz_session_all_subjects_mixed(q, context: ContextTypes.DEFAULT
         random.shuffle(ids)
 
         # Limit to a reasonable number to avoid overwhelming users
-        ids = ids[:50]  # Maximum 50 questions
+        # ids = ids[:50]  # Maximum 50 questions
 
         # Save for retry
         context.user_data["last_subject"] = "ALL_SUBJECTS"
@@ -826,7 +825,7 @@ async def begin_quiz_session_all_subjects_mixed_ai(q, context: ContextTypes.DEFA
         random.shuffle(ids)
 
         # Limit to a reasonable number
-        ids = ids[:50]  # Maximum 50 questions
+        # ids = ids[:50]  # Maximum 50 questions
 
         conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
         conn.execute(
