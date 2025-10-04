@@ -1090,13 +1090,6 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ---- delete last ----
-    if act == "dellast":
-        await q.message.edit_text("Admin › Delete last\n\nDelete the *last quiz you added*?\nThis cannot be undone.",
-                                  reply_markup=InlineKeyboardMarkup([
-                                      [InlineKeyboardButton("✅ Confirm", callback_data="a:dellast_yes"),
-                                       InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]
-                                  ]), parse_mode="Markdown")
-        return
     if act == "dellast_yes":
         last = conn.execute("SELECT quiz_id FROM admin_log WHERE admin_id=? ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
         if not last:
@@ -1108,6 +1101,31 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
             await q.message.edit_text("Deleted your last added quiz.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        return
+
+    # ---- delete specific quiz (from /delquiz confirmation) ----
+    if act.startswith("delquiz:"):
+        qid = int(act.split(":")[1])
+        # Verify the quiz still exists and user still has permission
+        row = conn.execute("SELECT * FROM quizzes WHERE id=?", (qid,)).fetchone()
+        if not row:
+            await q.message.edit_text("Quiz not found or already deleted.",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            return
+        
+        uid = q.from_user.id
+        if not (is_owner(uid) or (is_admin(uid) and int(row["added_by"] or 0) == int(uid))):
+            await notify_owner_unauthorized(context.bot, uid, "delquiz", f"qid:{qid}")
+            await q.message.edit_text("Only owner can delete arbitrary quizzes. Admins may delete only their own.",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            return
+        
+        # Delete the quiz
+        conn.execute("DELETE FROM quizzes WHERE id=?", (qid,))
+        conn.execute("DELETE FROM admin_log WHERE quiz_id=?", (qid,))
+        conn.commit()
+        await q.message.edit_text(f"✅ Deleted quiz #{qid}.",
+                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
     # ---- export menus/actions (FIXED chapter parser) ----
