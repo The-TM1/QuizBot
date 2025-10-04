@@ -242,6 +242,46 @@ def sanitize_for_poll(q, options, expl):
     expl = trunc(expl, 200) if expl else None
     return q, options, expl
 
+def check_single_quiz(question, options, correct_option):
+    """Check if a single quiz exists in database"""
+    try:
+        # Clean question text
+        question_clean = re.sub(r'^[\(\[]\d+/\d+[\)\]]\s*', '', question)
+        
+        # Search for matches
+        rows = conn.execute(
+            "SELECT id, subject, chapter, question, options_json, correct FROM quizzes WHERE question=?", 
+            (question_clean,)
+        ).fetchall()
+        
+        matches = []
+        for r in rows:
+            try:
+                ropts = json.loads(r["options_json"])
+                if ropts == options and int(r["correct"]) == int(correct_option):
+                    matches.append({
+                        'id': r['id'],
+                        'subject': r['subject'],
+                        'chapter': r['chapter'],
+                        'question': r['question']
+                    })
+            except Exception:
+                continue
+        
+        return {
+            'input_question': question,
+            'matches': matches,
+            'status': 'found' if matches else 'not_found'
+        }
+        
+    except Exception as e:
+        return {
+            'input_question': question,
+            'matches': [],
+            'status': 'error',
+            'error': str(e)
+        }
+
 # ------------ Parsing helpers for commands ------------
 def _quoted_parts(s: str):
     return re.findall(r'"([^"]+)"', s)
@@ -389,6 +429,7 @@ def admin_menu(uid: int):
          InlineKeyboardButton("#️⃣ Count", callback_data="a:count")],
         [InlineKeyboardButton("📣 Broadcast", callback_data="a:broadcast"),
          InlineKeyboardButton("🔎 Search Quiz id", callback_data="a:search_id")],
+        [InlineKeyboardButton("🔍 Mass Check Polls", callback_data="a:mass_check")],  # UPDATED
         [InlineKeyboardButton("👑 Admins", callback_data="a:admins"),
          InlineKeyboardButton("👥 Users", callback_data="a:users")],
         [InlineKeyboardButton("🗂 Export users DB", callback_data="a:export_users"),
@@ -1697,6 +1738,113 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
+    if act == "mass_check":
+        context.user_data["mode"] = "MASS_CHECK"
+        context.user_data["mass_check_polls"] = []
+        await q.message.edit_text(
+            "🔍 *Mass Check Mode Activated*\n\n"
+            "Now forward multiple quiz polls to me one by one. I'll collect them and check which ones exist in the database.\n\n"
+            "When you're done, press the 'Finish & Check' button below.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Finish & Check", callback_data="a:mass_check_finish")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="a:mass_check_cancel")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]
+            ])
+        )
+        return
+
+    if act == "mass_check_finish":
+        polls = context.user_data.get("mass_check_polls", [])
+        if not polls:
+            await q.message.edit_text("No polls collected for mass check.", 
+                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            context.user_data["mode"] = None
+            return
+            
+        results = []
+        for poll_data in polls:
+            result = check_single_quiz(
+                poll_data['question'],
+                poll_data['options'],
+                poll_data['correct_option']
+            )
+            results.append(result)
+        
+        # Generate report
+        total = len(results)
+        found = sum(1 for r in results if r['status'] == 'found')
+        not_found = sum(1 for r in results if r['status'] == 'not_found')
+        errors = sum(1 for r in results if r['status'] == 'error')
+        
+        report = f"📊 *Mass Check Results*\n\n"
+        report += f"Total polls checked: *{total}*\n"
+        report += f"✅ Found in database: *{found}*\n"
+        report += f"❌ Not found: *{not_found}*\n"
+        report += f"⚠️ Errors: *{errors}*\n\n"
+        
+        # Add details for found quizzes
+        found_quizzes = [r for r in results if r['status'] == 'found']
+        if found_quizzes:
+            report += "*Found Quizzes:*\n"
+            for i, result in enumerate(found_quizzes, 1):
+                match = result['matches'][0]  # Take first match
+                report += f"{i}. ID: `{match['id']}` - {match['subject']} › {match['chapter']}\n"
+        
+        # Add details for not found quizzes
+        not_found_quizzes = [r for r in results if r['status'] == 'not_found']
+        if not_found_quizzes:
+            report += f"\n*Not Found ({len(not_found_quizzes)}):*\n"
+            for i, result in enumerate(not_found_quizzes[:5], 1):
+                report += f"{i}. {result['input_question'][:50]}...\n"
+            
+            if len(not_found_quizzes) > 5:
+                report += f"... and {len(not_found_quizzes) - 5} more\n"
+        
+        await q.message.edit_text(report, parse_mode="Markdown",
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        context.user_data["mode"] = None
+        context.user_data["mass_check_polls"] = []
+        return
+
+    if act == "mass_check_cancel":
+        context.user_data["mode"] = None
+        context.user_data["mass_check_polls"] = []
+        await q.message.edit_text("❌ Mass check cancelled.", 
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        return
+
+    if act == "mass_del_ai_confirm":
+        quiz_ids = context.user_data.get("pending_mass_delete_ai", [])
+        if not quiz_ids:
+            await q.message.edit_text("No pending mass delete operation.", 
+                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            return
+            
+        try:
+            # Delete the quizzes
+            placeholders = ','.join('?' * len(quiz_ids))
+            conn.execute(f"DELETE FROM quizzes WHERE id IN ({placeholders})", quiz_ids)
+            conn.execute(f"DELETE FROM admin_log WHERE quiz_id IN ({placeholders})", quiz_ids)
+            conn.commit()
+            
+            await q.message.edit_text(f"✅ Successfully deleted *{len(quiz_ids)}* AI quizzes.", 
+                                    parse_mode="Markdown",
+                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            
+        except Exception as e:
+            await q.message.edit_text(f"❌ Error during mass deletion: {str(e)}",
+                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        finally:
+            context.user_data.pop("pending_mass_delete_ai", None)
+        return
+
+    if act == "mass_del_ai_cancel":
+        context.user_data.pop("pending_mass_delete_ai", None)
+        await q.message.edit_text("❌ Mass delete AI operation cancelled.", 
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        return
+
 # ------------ Command helpers: edit/del subject/chapter ------------
 async def _owner_required(update):
     if not is_owner(update.effective_user.id):
@@ -1775,8 +1923,10 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.poll:
             p = update.message.poll
             qtxt = p.question
+            # Remove number prefixes like "(2/30)" or "[2/30]"
+            qtxt_clean = re.sub(r'^[\(\[]\d+/\d+[\)\]]\s*', '', qtxt)
             opts = [o.text for o in p.options]
-            cand = conn.execute("SELECT id, question, options_json, correct, subject, chapter FROM quizzes WHERE question=?", (qtxt,)).fetchall()
+            cand = conn.execute("SELECT id, question, options_json, correct, subject, chapter FROM quizzes WHERE question=?", (qtxt_clean,)).fetchall()
             matches = []
             for r in cand:
                 try:
@@ -1794,7 +1944,9 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("\n".join(lines))
         elif update.message.text:
             qtxt = update.message.text.strip()
-            rows = conn.execute("SELECT id, subject, chapter FROM quizzes WHERE question LIKE ? ORDER BY id LIMIT 10", (f"%{qtxt}%",)).fetchall()
+            # Also clean text input in case it has number prefixes
+            qtxt_clean = re.sub(r'^[\(\[]\d+/\d+[\)\]]\s*', '', qtxt)
+            rows = conn.execute("SELECT id, subject, chapter FROM quizzes WHERE question LIKE ? ORDER BY id LIMIT 10", (f"%{qtxt_clean}%",)).fetchall()
             if not rows:
                 await update.message.reply_text("No match.")
             else:
@@ -1803,6 +1955,37 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append(f"• id:{r['id']} — {r['subject']} › {r['chapter']}")
                 await update.message.reply_text("\n".join(lines))
         context.user_data["mode"] = None
+        return
+
+    # Mass check polls collection
+    if mode == "MASS_CHECK" and update.message and update.message.poll:
+        if not is_owner(uid):
+            await notify_owner_unauthorized(context.bot, uid, "MASS_CHECK_POLL")
+            await update.message.reply_text("👉 Owner only."); return
+            
+        poll = update.message.poll
+        if poll.type != "quiz":
+            await update.message.reply_text("Please send only quiz-type polls for mass check.")
+            return
+            
+        # Add poll to collection
+        poll_data = {
+            'question': poll.question,
+            'options': [o.text for o in poll.options],
+            'correct_option': poll.correct_option_id
+        }
+        context.user_data["mass_check_polls"].append(poll_data)
+        
+        count = len(context.user_data["mass_check_polls"])
+        await update.message.reply_text(
+            f"✅ Poll added to mass check collection. Total collected: *{count}*\n\n"
+            "Continue forwarding more polls or press 'Finish & Check' when done.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Finish & Check", callback_data="a:mass_check_finish")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="a:mass_check_cancel")]
+            ])
+        )
         return
 
     # owner sends message to specific user
@@ -2248,6 +2431,7 @@ if __name__ == "__main__":
     app_.add_handler(CommandHandler("editchap_ai", editchap_ai_cmd))
     app_.add_handler(CommandHandler("delsub_ai", delsub_ai_cmd))
     app_.add_handler(CommandHandler("delchap_ai", delchap_ai_cmd))
+    app_.add_handler(CommandHandler("mass_del_ai", mass_del_ai_cmd))
 
     app_.add_handler(CallbackQueryHandler(btn))
     app_.add_handler(PollAnswerHandler(poll_answer))
