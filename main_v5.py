@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 # ------------ Config / ENV ------------
 load_dotenv("secrets.env")
-OWNER_ID = 5902126578
+OWNER_ID = os.getenv("ADMIN_ID")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DB_PATH = os.getenv("DB_PATH", "db.sqlite3")
 ADMIN_IDS_ENV = os.getenv("ADMIN_ID", "")  # optional comma list
@@ -709,7 +709,7 @@ async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
             )
         conn.commit()
 
-        await q.message.edit_text("AI Quiz started! 🤖🎯")
+        await q.message.edit_text("AI Quiz started! 🤖🎯\nSend /stop to stop the quiz.")
         await send_next_quiz(context.bot, sid)
 
     except Exception as e:
@@ -1075,7 +1075,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("⬅️ Back", callback_data=f"a:add_subj:{sub}")]
         ])
         await q.message.edit_text(
-            f"Admin › Add quiz › {sub} › {chapter}\n\nNow send *Quiz-type* polls to add, or import a JSON.",
+            f"Admin › Add quiz › {sub} › {chapter}\n\nNow send *Quiz-type* polls to add, or import a JSON.\nSend /done to finish.",
             reply_markup=kb, parse_mode="Markdown"
         )
         return
