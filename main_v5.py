@@ -1560,7 +1560,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["add_chapter"] = update.message.text.strip()
         context.user_data["mode"] = "ADDING"
         await update.message.reply_text(
-            f"Chapter set to *{context.user_data['add_chapter']}*.\nNow send Quiz polls to add.",
+            f"Chapter set to *{context.user_data['add_chapter']}*.\nNow send Quiz polls to add.\nSend /done to finish.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⬅️ Back", callback_data=f"a:add_subj:{context.user_data['add_subject']}")]
