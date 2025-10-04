@@ -321,6 +321,21 @@ def parse_subject_old_new_chap(raw: str, ai=False):
         return toks[0], toks[1], " ".join(toks[2:])
     return "", "", ""
 
+# Add these helper functions in the "Helpers" section after the existing functions
+def _count_valid_quizzes_all_subjects_mixed(ai: bool):
+    """Count valid quizzes from all subjects (mixed)"""
+    sql = "SELECT COUNT(*) as count FROM quizzes WHERE "
+    sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
+    result = conn.execute(sql).fetchone()
+    return result["count"] if result else 0
+
+def _count_valid_quizzes_all_chapters_mixed(subject: str, ai: bool):
+    """Count valid quizzes from all chapters of a subject (mixed)"""
+    sql = "SELECT COUNT(*) as count FROM quizzes WHERE subject=? AND "
+    sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
+    result = conn.execute(sql, (subject,)).fetchone()
+    return result["count"] if result else 0
+
 # ------------ Data Views ------------
 def list_subjects_with_counts(ai_only=False):
     if ai_only:
@@ -429,15 +444,19 @@ async def user_subjects(update: Update, page: int = 0):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
         await edit_or_reply(update, "No subjects added yet.", kb)
         return
+    
+    # Get count for "All subjects mixed"
+    all_subjects_count = _count_valid_quizzes_all_subjects_mixed(ai=False)
+    
     pages = max(1, ceil(len(subs) / PAGE_SIZE))
     page = max(0, min(page, pages - 1))
     slice_ = subs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
     rows = [[InlineKeyboardButton(f"📚 {s} (chapters: {chs} | quizzes: {qs})", callback_data=f"u:subj:{s}")]
             for (s, chs, qs) in slice_]
     
-    # Add "All subjects mixed" button at the top
+    # Add "All subjects mixed" button at the top with count
     if page == 0:  # Only show on first page
-        rows.insert(0, [InlineKeyboardButton("🎯 All subjects mixed", callback_data="u:all_subjects_mixed")])
+        rows.insert(0, [InlineKeyboardButton(f"🎯 All subjects mixed ({all_subjects_count})", callback_data="u:all_subjects_mixed")])
     
     if pages > 1:
         nav = []
@@ -463,15 +482,19 @@ async def user_chapters(update: Update, subject: str, page: int = 0):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:startback")]])
         await edit_or_reply(update, f"No chapters found in *{subject}*.", kb, parse_mode="Markdown")
         return
+    
+    # Get count for "All chapters mixed"
+    all_chapters_count = _count_valid_quizzes_all_chapters_mixed(subject, ai=False)
+    
     pages = max(1, ceil(len(chs) / PAGE_SIZE))
     page = max(0, min(page, pages - 1))
     slice_ = chs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
     rows = [[InlineKeyboardButton(f"📖 {c} (quizzes: {qs})", callback_data=f"u:chap:{c}")]
             for (c, qs) in slice_]
     
-    # Add "All chapters mixed" button at the top
+    # Add "All chapters mixed" button at the top with count
     if page == 0:  # Only show on first page
-        rows.insert(0, [InlineKeyboardButton("🎯 All chapters mixed", callback_data=f"u:all_chapters_mixed:{subject}")])
+        rows.insert(0, [InlineKeyboardButton(f"🎯 All chapters mixed ({all_chapters_count})", callback_data=f"u:all_chapters_mixed:{subject}")])
     
     if pages > 1:
         nav = []
@@ -490,15 +513,19 @@ async def user_subjects_ai(update: Update, page: int = 0):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
         await edit_or_reply(update, "No AI-generated subjects available.", kb)
         return
+    
+    # Get count for "All subjects mixed" for AI
+    all_subjects_count_ai = _count_valid_quizzes_all_subjects_mixed(ai=True)
+    
     pages = max(1, ceil(len(subs) / PAGE_SIZE))
     page = max(0, min(page, pages - 1))
     slice_ = subs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
     rows = [[InlineKeyboardButton(f"🤖 {s} (chapters: {chs} | quizzes: {qs})", callback_data=f"uai:subj:{s}")]
             for (s, chs, qs) in slice_]
     
-    # Add "All subjects mixed" button at the top for AI
+    # Add "All subjects mixed" button at the top for AI with count
     if page == 0:  # Only show on first page
-        rows.insert(0, [InlineKeyboardButton("🎯 All subjects mixed (AI)", callback_data="uai:all_subjects_mixed")])
+        rows.insert(0, [InlineKeyboardButton(f"🎯 All subjects mixed ({all_subjects_count_ai})", callback_data="uai:all_subjects_mixed")])
     
     if pages > 1:
         nav = []
@@ -516,15 +543,19 @@ async def user_chapters_ai(update: Update, subject: str, page: int = 0):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="uai:startback")]])
         await edit_or_reply(update, f"No chapters found in *{subject}*.", kb, parse_mode="Markdown")
         return
+    
+    # Get count for "All chapters mixed" for AI
+    all_chapters_count_ai = _count_valid_quizzes_all_chapters_mixed(subject, ai=True)
+    
     pages = max(1, ceil(len(chs) / PAGE_SIZE))
     page = max(0, min(page, pages - 1))
     slice_ = chs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
     rows = [[InlineKeyboardButton(f"📖 {c} (quizzes: {qs})", callback_data=f"uai:chap:{c}")]
             for (c, qs) in slice_]
     
-    # Add "All chapters mixed" button at the top for AI
+    # Add "All chapters mixed" button at the top for AI with count
     if page == 0:  # Only show on first page
-        rows.insert(0, [InlineKeyboardButton("🎯 All chapters mixed (AI)", callback_data=f"uai:all_chapters_mixed:{subject}")])
+        rows.insert(0, [InlineKeyboardButton(f"🎯 All chapters mixed ({all_chapters_count_ai})", callback_data=f"uai:all_chapters_mixed:{subject}")])
     
     if pages > 1:
         nav = []
@@ -573,13 +604,17 @@ async def pre_quiz_screen(q, context: ContextTypes.DEFAULT_TYPE):
     op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
     timer_text = "Without Timer" if op == 0 else f"{op}s"
     
-    # Handle mixed modes in display
+    # Get the actual count of quizzes for the selected mode
     if subj == "ALL_SUBJECTS" and chap == "MIXED":
-        display_text = "All Subjects Mixed"
+        quiz_count = _count_valid_quizzes_all_subjects_mixed(ai=False)
+        display_text = f"All Subjects Mixed ({quiz_count} quizzes)"
     elif chap == "ALL_CHAPTERS_MIXED":
-        display_text = f"{subj} - All Chapters Mixed"
+        quiz_count = _count_valid_quizzes_all_chapters_mixed(subj, ai=False)
+        display_text = f"{subj} - All Chapters Mixed ({quiz_count} quizzes)"
     else:
-        display_text = f"{subj} › {chap}"
+        # For specific chapter, get count from the database
+        quiz_count = len(_collect_valid_quiz_ids(subj, chap, ai=False))
+        display_text = f"{subj} › {chap} ({quiz_count} quizzes)"
     
     txt = (f"Home › {display_text} › Timer\n\n"
            f"Get ready!\n\nMode: {display_text}\nTimer: {timer_text}\n\n"
@@ -587,7 +622,7 @@ async def pre_quiz_screen(q, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("I am ready!", callback_data="u:ready")],
                                [InlineKeyboardButton("⬅️ Back", callback_data="u:timerback")]])
     await q.message.edit_text(txt, reply_markup=kb)
-
+    
 # Replace the existing pre_quiz_screen_ai function with this:
 async def pre_quiz_screen_ai(q, context: ContextTypes.DEFAULT_TYPE):
     subj = context.user_data.get("ai_subject")
@@ -597,13 +632,17 @@ async def pre_quiz_screen_ai(q, context: ContextTypes.DEFAULT_TYPE):
     op = int(context.user_data.get("ai_open_period", DEFAULT_OPEN_PERIOD))
     timer_text = "Without Timer" if op == 0 else f"{op}s"
     
-    # Handle mixed modes in display for AI
+    # Get the actual count of quizzes for the selected AI mode
     if subj == "ALL_SUBJECTS" and chap == "MIXED":
-        display_text = "All AI Subjects Mixed"
+        quiz_count = _count_valid_quizzes_all_subjects_mixed(ai=True)
+        display_text = f"All AI Subjects Mixed ({quiz_count} quizzes)"
     elif chap == "ALL_CHAPTERS_MIXED":
-        display_text = f"{subj} - All AI Chapters Mixed"
+        quiz_count = _count_valid_quizzes_all_chapters_mixed(subj, ai=True)
+        display_text = f"{subj} - All AI Chapters Mixed ({quiz_count} quizzes)"
     else:
-        display_text = f"{subj} › {chap}"
+        # For specific AI chapter, get count from the database
+        quiz_count = len(_collect_valid_quiz_ids(subj, chap, ai=True))
+        display_text = f"{subj} › {chap} ({quiz_count} quizzes)"
     
     txt = (f"AI Gen › {display_text} › Timer\n\n"
            f"Get ready!\n\nMode: {display_text}\nTimer: {timer_text}\n\n"
