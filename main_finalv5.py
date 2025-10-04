@@ -935,6 +935,36 @@ async def delquiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(txt, reply_markup=kb)
 
+# ------------ /delquiz_ai with confirmation (for AI quizzes) ------------
+async def delquiz_ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not context.args:
+        await update.message.reply_text("Usage: /delquiz_ai <quiz_id>")
+        return
+    try:
+        qid = int(context.args[0])
+    except:
+        await update.message.reply_text("quiz_id must be a number.")
+        return
+    row = conn.execute("SELECT * FROM quizzes WHERE id=? AND ai_generated=1", (qid,)).fetchone()
+    if not row:
+        await update.message.reply_text("AI Quiz not found.")
+        return
+    if not (is_owner(uid) or (is_admin(uid) and int(row["added_by"] or 0) == int(uid))):
+        await notify_owner_unauthorized(context.bot, uid, "/delquiz_ai", f"qid:{qid}")
+        await update.message.reply_text("Only owner can delete arbitrary AI quizzes. Admins may delete only their own.")
+        return
+    # preview & confirm
+    txt = f"🤖 AI Quiz #{row['id']} — {row['subject']} / {row['chapter']}\n\n{row['question']}\n\nOptions:\n"
+    for i, o in enumerate(json.loads(row["options_json"])):
+        mark = "✅" if i == row["correct"] else "▫️"
+        txt += f"{mark} {o}\n"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirm delete AI quiz", callback_data=f"a:delquiz_ai:{row['id']}")],
+        [InlineKeyboardButton("⬅️ Cancel", callback_data="a:panel")]
+    ])
+    await update.message.reply_text(txt, reply_markup=kb)
+
 # ------------ Export helpers ------------
 def _export_items(where_sql: str = "", params: tuple = (), filename: str = "quizzes.json"):
     from io import BytesIO
@@ -1125,6 +1155,31 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.execute("DELETE FROM admin_log WHERE quiz_id=?", (qid,))
         conn.commit()
         await q.message.edit_text(f"✅ Deleted quiz #{qid}.",
+                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        return
+
+    # ---- delete specific AI quiz (from /delquiz_ai confirmation) ----
+    if act.startswith("delquiz_ai:"):
+        qid = int(act.split(":")[1])
+        # Verify the AI quiz still exists and user still has permission
+        row = conn.execute("SELECT * FROM quizzes WHERE id=? AND ai_generated=1", (qid,)).fetchone()
+        if not row:
+            await q.message.edit_text("AI Quiz not found or already deleted.",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            return
+        
+        uid = q.from_user.id
+        if not (is_owner(uid) or (is_admin(uid) and int(row["added_by"] or 0) == int(uid))):
+            await notify_owner_unauthorized(context.bot, uid, "delquiz_ai", f"qid:{qid}")
+            await q.message.edit_text("Only owner can delete arbitrary AI quizzes. Admins may delete only their own.",
+                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            return
+        
+        # Delete the AI quiz
+        conn.execute("DELETE FROM quizzes WHERE id=?", (qid,))
+        conn.execute("DELETE FROM admin_log WHERE quiz_id=?", (qid,))
+        conn.commit()
+        await q.message.edit_text(f"✅ Deleted AI quiz #{qid}.",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
@@ -1772,6 +1827,7 @@ if __name__ == "__main__":
     app_.add_handler(CommandHandler("stop", stop_cmd))
     app_.add_handler(CommandHandler("done", done_cmd))
     app_.add_handler(CommandHandler("delquiz", delquiz_cmd))
+    app_.add_handler(CommandHandler("delquiz_ai", delquiz_ai_cmd))
     # restored owner tools (human)
     app_.add_handler(CommandHandler("editsub", editsub_cmd))
     app_.add_handler(CommandHandler("editchap", editchap_cmd))
