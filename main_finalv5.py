@@ -909,7 +909,7 @@ async def leaderboard(q, page=0):
 async def delquiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not (is_owner(uid) or is_admin(uid)):
-        await update.message.reply_text("Admin only")
+        await update.message.reply_text("👉 Admin only")
         return
     if not context.args:
         await update.message.reply_text("Usage: /delquiz <quiz_id>")
@@ -925,7 +925,7 @@ async def delquiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not (is_owner(uid) or (is_admin(uid) and int(row["added_by"] or 0) == int(uid))):
         await notify_owner_unauthorized(context.bot, uid, "/delquiz", f"qid:{qid}")
-        await update.message.reply_text("Only owner can delete arbitrary quizzes. Admins may delete only their own.")
+        await update.message.reply_text("You didn't add this quiz.")
         return
     # preview & confirm
     txt = f"Quiz #{row['id']} — {row['subject']} / {row['chapter']}\n\n{row['question']}\n\nOptions:\n"
@@ -942,7 +942,7 @@ async def delquiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def delquiz_ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not (is_owner(uid) or is_admin(uid)):
-        await update.message.reply_text("Admin only")
+        await update.message.reply_text("👉 Admin only")
         return
     if not context.args:
         await update.message.reply_text("Usage: /delquiz_ai <quiz_id>")
@@ -958,7 +958,7 @@ async def delquiz_ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not (is_owner(uid) or (is_admin(uid) and int(row["added_by"] or 0) == int(uid))):
         await notify_owner_unauthorized(context.bot, uid, "/delquiz_ai", f"qid:{qid}")
-        await update.message.reply_text("Only owner can delete arbitrary AI quizzes. Admins may delete only their own.")
+        await update.message.reply_text("You didn't add this quiz.")
         return
     # preview & confirm
     txt = f"🤖 AI Quiz #{row['id']} — {row['subject']} / {row['chapter']}\n\n{row['question']}\n\nOptions:\n"
@@ -1002,7 +1002,7 @@ async def users_panel(q, page=0):
     uid = q.from_user.id
     if not is_owner(uid):
         await notify_owner_unauthorized(q.bot, uid, "open_users_panel")
-        await q.message.edit_text("Owner only.", reply_markup=admin_menu(uid))
+        await q.message.edit_text("👉 Owner only.", reply_markup=admin_menu(uid))
         return
     rowsdb = conn.execute("SELECT user_id, username, first_name, last_name, is_banned FROM users ORDER BY last_seen DESC").fetchall()
     pages = max(1, ceil(len(rowsdb)/PAGE_SIZE))
@@ -1052,7 +1052,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                   "search_id"}
     if act.split(":")[0] in OWNER_ONLY and not is_owner(uid):
         await notify_owner_unauthorized(context.bot, uid, f"admin_cb:{act}")
-        await q.message.reply_text("Owner only.")
+        await q.message.reply_text("👉 Owner only.")
         return
 
     # basics
@@ -1092,7 +1092,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if act == "newchap":
         if not context.user_data.get("add_subject"):
-            await q.message.edit_text("Pick a subject first.",
+            await q.message.edit_text("Pick a *subject* first.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:add")]]))
             return
         context.user_data["mode"] = "NEW_CHAPTER"
@@ -1135,7 +1135,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.execute("DELETE FROM quizzes WHERE id=?", (last["quiz_id"],))
             conn.execute("DELETE FROM admin_log WHERE admin_id=? AND quiz_id=?", (uid, last["quiz_id"]))
             conn.commit()
-            await q.message.edit_text("Deleted your last added quiz.",
+            await q.message.edit_text("✅ Deleted your last added quiz.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
@@ -1152,7 +1152,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = q.from_user.id
         if not (is_owner(uid) or (is_admin(uid) and int(row["added_by"] or 0) == int(uid))):
             await notify_owner_unauthorized(context.bot, uid, "delquiz", f"qid:{qid}")
-            await q.message.edit_text("Only owner can delete arbitrary quizzes. Admins may delete only their own.",
+            await q.message.edit_text("You didn't add this quiz.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
             return
         
@@ -1177,7 +1177,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = q.from_user.id
         if not (is_owner(uid) or (is_admin(uid) and int(row["added_by"] or 0) == int(uid))):
             await notify_owner_unauthorized(context.bot, uid, "delquiz_ai", f"qid:{qid}")
-            await q.message.edit_text("Only owner can delete arbitrary AI quizzes. Admins may delete only their own.",
+            await q.message.edit_text("You didn't add this AI quiz.",
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
             return
         
@@ -1235,7 +1235,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if act.startswith("users:toggle:"):
         tgt = int(act.split(":")[2])
         if tgt == OWNER_ID:
-            await q.message.edit_text("Cannot ban the owner.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:users")]]))
+            await q.message.edit_text("❌ Cannot ban the owner.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:users")]]))
         else:
             cur = conn.execute("SELECT is_banned FROM users WHERE user_id=?", (tgt,)).fetchone()
             conn.execute("UPDATE users SET is_banned=? WHERE user_id=?", (0 if cur and cur["is_banned"] else 1, tgt))
@@ -1277,7 +1277,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if act.startswith("admins:rm:"):
         tgt = int(act.split(":")[2])
         if tgt == OWNER_ID:
-            await q.message.edit_text("Cannot remove owner.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:admins")]]))
+            await q.message.edit_text("❌ Cannot remove owner.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:admins")]]))
         else:
             remove_admin(tgt)
             await q.message.edit_text("Removed.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:admins")]]))
@@ -1290,7 +1290,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if act == "broadcast":
         context.user_data["mode"] = "BROADCAST_ENTER"
-        await q.message.edit_text("Send the message to broadcast to all users.",
+        await q.message.edit_text("Send the *message* to broadcast to all users.",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
     if act == "export_users":
@@ -1318,7 +1318,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------ Command helpers: edit/del subject/chapter ------------
 async def _owner_required(update):
     if not is_owner(update.effective_user.id):
-        await update.message.reply_text("Owner only.")
+        await update.message.reply_text("👉 Owner only.")
         return False
     return True
 
@@ -1332,7 +1332,7 @@ async def editsub(update: Update, context: ContextTypes.DEFAULT_TYPE, ai=False):
     sql = "UPDATE quizzes SET subject=? WHERE subject=? AND "
     sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
     conn.execute(sql, (new, old)); conn.commit()
-    await update.message.reply_text(f"Subject renamed: {old} → {new} ({'AI' if ai else 'Human'}).")
+    await update.message.reply_text(f"*Subject renamed:* {old} → {new} ({'AI' if ai else 'Human'}).")
 
 async def editchap(update: Update, context: ContextTypes.DEFAULT_TYPE, ai=False):
     if not await _owner_required(update): return
@@ -1344,7 +1344,7 @@ async def editchap(update: Update, context: ContextTypes.DEFAULT_TYPE, ai=False)
     sql = "UPDATE quizzes SET chapter=? WHERE subject=? AND chapter=? AND "
     sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
     conn.execute(sql, (new, subj, old)); conn.commit()
-    await update.message.reply_text(f"Chapter renamed in {subj}: {old} → {new} ({'AI' if ai else 'Human'}).")
+    await update.message.reply_text(f"*Chapter renamed* in {subj}: {old} → {new} ({'AI' if ai else 'Human'}).")
 
 async def delsub(update: Update, context: ContextTypes.DEFAULT_TYPE, ai=False):
     if not await _owner_required(update): return
@@ -1357,7 +1357,7 @@ async def delsub(update: Update, context: ContextTypes.DEFAULT_TYPE, ai=False):
     sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
     cur = conn.execute(sql, (subj,)); cnt = cur.rowcount
     conn.commit()
-    await update.message.reply_text(f"Deleted subject '{subj}' ({cnt} quizzes) ({'AI' if ai else 'Human'}).")
+    await update.message.reply_text(f"*Deleted subject* '{subj}' ({cnt} quizzes) ({'AI' if ai else 'Human'}).")
 
 async def delchap(update: Update, context: ContextTypes.DEFAULT_TYPE, ai=False):
     if not await _owner_required(update): return
@@ -1370,7 +1370,7 @@ async def delchap(update: Update, context: ContextTypes.DEFAULT_TYPE, ai=False):
     sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
     cur = conn.execute(sql, (subj, chap)); cnt = cur.rowcount
     conn.commit()
-    await update.message.reply_text(f"Deleted {subj} › {chap} ({cnt} quizzes) ({'AI' if ai else 'Human'}).")
+    await update.message.reply_text(f"*Deleted* {subj} › {chap} ({cnt} quizzes) ({'AI' if ai else 'Human'}).")
 
 # ------------ Text / Poll handler (modes incl. SEARCH_ID) ------------
 async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1451,7 +1451,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Please send a *quiz-type* poll.", parse_mode="Markdown"); return
         sub = context.user_data.get("add_subject"); chap = context.user_data.get("add_chapter")
         if not sub or not chap:
-            await update.message.reply_text("Please pick subject & chapter again from Admin › Add quiz."); return
+            await update.message.reply_text("Please pick *subject & chapter* again from Admin › Add quiz."); return
         question = poll.question
         options = [o.text for o in poll.options]
         correct = poll.correct_option_id
@@ -1466,7 +1466,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.execute("INSERT INTO admin_log(admin_id,quiz_id,created_at) VALUES(?,?,?)",
                          (uid, qid, int(time.time())))
             conn.commit()
-            await update.message.reply_text(f"✅ Added to {sub} › {chap} (id:{qid}).")
+            await update.message.reply_text(f"✅ *Added* to {sub} › {chap} (id:{qid}).")
         except Exception as e:
             await update.message.reply_text(f"Add error: {e}")
         return
@@ -1475,7 +1475,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if mode == "IMPORT" and update.message and update.message.document:
         if not is_owner(uid):
             await notify_owner_unauthorized(context.bot, uid, "IMPORT", update.message.document.file_name)
-            await update.message.reply_text("Owner only."); return
+            await update.message.reply_text("👉 Owner only."); return
         try:
             tgfile = await update.message.document.get_file()
             text = bytes(await tgfile.download_as_bytearray()).decode("utf-8-sig").strip()
@@ -1489,7 +1489,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      it.get("explanation"), it.get("subject"), it.get("chapter"), int(time.time()), int(uid))
                 ); count += 1
             conn.commit()
-            await update.message.reply_text(f"Imported {count} quizzes.")
+            await update.message.reply_text(f"Imported *{count}* quizzes.")
         except Exception as e:
             await update.message.reply_text("Import error: " + str(e))
         finally:
@@ -1498,9 +1498,9 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # import into selected chapter
     if mode == "IMPORT_CHAPTER" and update.message and update.message.document:
-        if not is_admin(uid):
+        if not (is_owner(uid) or is_admin(uid)):
             await notify_owner_unauthorized(context.bot, uid, "IMPORT_CHAPTER", update.message.document.file_name)
-            await update.message.reply_text("Admins only."); return
+            await update.message.reply_text("👉 Admins only."); return
         sub = context.user_data.get("add_subject"); chap = context.user_data.get("add_chapter")
         try:
             tgfile = await update.message.document.get_file()
@@ -1517,7 +1517,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      sub, chap, int(time.time()), int(uid))
                 ); count += 1
             conn.commit()
-            await update.message.reply_text(f"Imported {count} items into {sub} › {chap}.")
+            await update.message.reply_text(f"Imported *{count}* items into {sub} › {chap}.")
         except Exception as e:
             await update.message.reply_text("Import error: " + str(e))
         finally:
@@ -1528,7 +1528,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if mode == "IMPORT_USERS" and update.message and update.message.document:
         if not is_owner(uid):
             await notify_owner_unauthorized(context.bot, uid, "IMPORT_USERS", update.message.document.file_name)
-            await update.message.reply_text("Owner only."); return
+            await update.message.reply_text("👉 Owner only."); return
         try:
             tgfile = await update.message.document.get_file()
             data = bytes(await tgfile.download_as_bytearray()).decode("utf-8-sig")
@@ -1544,7 +1544,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      u.get("chat_id"), u.get("last_seen"), int(u.get("is_banned", 0)))
                 ); imported += 1
             conn.commit()
-            await update.message.reply_text(f"Imported users: {imported}")
+            await update.message.reply_text(f"Imported users: *{imported}*")
         except Exception as e:
             await update.message.reply_text("Import users error: " + str(e))
         finally:
@@ -1555,7 +1555,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if mode == "AI_IMPORT" and update.message and update.message.document:
         if not is_owner(uid):
             await notify_owner_unauthorized(context.bot, uid, "AI_IMPORT", update.message.document.file_name)
-            await update.message.reply_text("Owner only."); return
+            await update.message.reply_text("👉 Owner only."); return
         try:
             tgfile = await update.message.document.get_file()
             text = bytes(await tgfile.download_as_bytearray()).decode("utf-8-sig").strip()
@@ -1570,7 +1570,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      int(time.time()), int(uid))
                 ); count += 1
             conn.commit()
-            await update.message.reply_text(f"Imported AI quizzes: {count}")
+            await update.message.reply_text(f"Imported AI quizzes: *{count}*")
         except Exception as e:
             await update.message.reply_text("AI import error: " + str(e))
         finally:
@@ -1676,9 +1676,9 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- handle broadcast confirm/cancel quickly (works even if admin_cb dispatch had issues) ---
     if q.data == "a:bcast_confirm":
         # allow only admins
-        if not is_admin(q.from_user.id):
+        if not is_owner(q.from_user.id):
             await notify_owner_unauthorized(context.bot, q.from_user.id, "bcast_confirm")
-            await q.message.reply_text("Only admin can use this."); return
+            await q.message.reply_text("Only *owner* can use this."); return
         await q.answer()
         draft = context.user_data.get("broadcast_draft")
         if not draft:
@@ -1694,14 +1694,14 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
         context.user_data["broadcast_draft"] = None
-        await q.message.edit_text(f"✅ Broadcasted to {ok} users.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        await q.message.edit_text(f"✅ Broadcasted to *{ok}* users.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
     if q.data == "a:bcast_cancel":
         # allow only admins
-        if not is_admin(q.from_user.id):
+        if not is_owner(q.from_user.id):
             await notify_owner_unauthorized(context.bot, q.from_user.id, "bcast_cancel")
-            await q.message.reply_text("Only admin can use this."); return
+            await q.message.reply_text("Only *owner* can use this."); return
         await q.answer()
         context.user_data["broadcast_draft"] = None
         await q.message.edit_text("❌ Broadcast cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
@@ -1716,11 +1716,11 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # user menu
     if data == "u:help":
-        await q.message.edit_text("Start → Subject → Chapter → Timer (or Without Timer) → I am ready!",
+        await q.message.edit_text("*Start → Subject → Chapter → Timer (or Without Timer) → I am ready!*",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])); return
     if data == "u:stats": await show_stats(q); return
     if data == "u:lb":
-        if not is_owner(uid): await q.message.reply_text("Owner only."); return
+        if not is_owner(uid): await q.message.reply_text("👉 Owner only."); return
         await leaderboard(q, page=0); return
     if data.startswith("u:lbp:"):
         await leaderboard(q, page=int(data.split(":")[2])); return
@@ -1750,7 +1750,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["open_period"] = context.user_data.get("last_open_period", DEFAULT_OPEN_PERIOD)
         await begin_quiz_session(q, context); return
     if data == "u:back":
-        await q.message.edit_text("Menu:", reply_markup=main_menu(uid)); return
+        await q.message.edit_text("*Menu:*", reply_markup=main_menu(uid)); return
 
     # AI menu
     if data == "uai:start": await user_subjects_ai(update); return
@@ -1772,7 +1772,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("a:"):
         if not is_admin(uid):
             await notify_owner_unauthorized(context.bot, uid, f"callback:{data}")
-            await q.message.reply_text("Only admin can use this.")
+            await q.message.reply_text("Only *admin* can use this.")
             return
         # top-level import (owner)
         if data == "a:import":
@@ -1803,19 +1803,19 @@ async def done_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not is_admin(uid):
         await notify_owner_unauthorized(context.bot, uid, "/done")
-        await update.message.reply_text("Only admin can use this.", reply_markup=main_menu(uid))
+        await update.message.reply_text("Only *admin* can use this.", reply_markup=main_menu(uid))
         return
     if context.user_data.get("mode") != "ADDING":
         await update.message.reply_text("Not currently adding quizzes.", reply_markup=admin_menu(uid))
         return
     context.user_data["mode"] = None
-    await update.message.reply_text("Finished adding quizzes.", reply_markup=admin_menu(uid))
+    await update.message.reply_text("*Finished* adding quizzes.", reply_markup=admin_menu(uid))
 
 async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
     conn.commit()
-    await update.message.reply_text("Quiz stopped.", reply_markup=main_menu(uid))
+    await update.message.reply_text("*Quiz stopped.*", reply_markup=main_menu(uid))
 
 # ------------ Keepalive (optional) ------------
 app = Flask(__name__)
