@@ -119,6 +119,40 @@ def db_init():
 
 pending_contact = {}
 
+# Add this in the "Helpers" section after the existing functions
+
+def _collect_valid_quiz_ids_all_subjects_mixed(ai: bool):
+    """Collect quiz IDs from all subjects (mixed)"""
+    sql = "SELECT id, question, options_json, correct, explanation FROM quizzes WHERE "
+    sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
+    rows = conn.execute(sql).fetchall()
+    valid = []
+    for r in rows:
+        try:
+            opts = json.loads(r["options_json"])
+            _q, _opts, _expl = sanitize_for_poll(r["question"], opts, r["explanation"])
+            if 0 <= int(r["correct"]) < len(_opts):
+                valid.append(int(r["id"]))
+        except Exception:
+            continue
+    return valid
+
+def _collect_valid_quiz_ids_all_chapters_mixed(subject: str, ai: bool):
+    """Collect quiz IDs from all chapters of a subject (mixed)"""
+    sql = "SELECT id, question, options_json, correct, explanation FROM quizzes WHERE subject=? AND "
+    sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
+    rows = conn.execute(sql, (subject,)).fetchall()
+    valid = []
+    for r in rows:
+        try:
+            opts = json.loads(r["options_json"])
+            _q, _opts, _expl = sanitize_for_poll(r["question"], opts, r["explanation"])
+            if 0 <= int(r["correct"]) < len(_opts):
+                valid.append(int(r["id"]))
+        except Exception:
+            continue
+    return valid
+
 async def busy(chat, action=ChatAction.TYPING, secs=0.25):
     await asyncio.sleep(secs)
 
@@ -388,6 +422,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ------------ User flow: Subjects & Chapters (Human + AI) ------------
+# Replace the existing user_subjects function with this:
 async def user_subjects(update: Update, page: int = 0):
     uid = update.effective_user.id if update.effective_user else update.callback_query.from_user.id
     subs = list_subjects_with_counts(ai_only=False)
@@ -400,6 +435,11 @@ async def user_subjects(update: Update, page: int = 0):
     slice_ = subs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
     rows = [[InlineKeyboardButton(f"📚 {s} (chapters: {chs} | quizzes: {qs})", callback_data=f"u:subj:{s}")]
             for (s, chs, qs) in slice_]
+    
+    # Add "All subjects mixed" button at the top
+    if page == 0:  # Only show on first page
+        rows.insert(0, [InlineKeyboardButton("🎯 All subjects mixed", callback_data="u:all_subjects_mixed")])
+    
     if pages > 1:
         nav = []
         if page > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"u:subjp:{page-1}"))
@@ -408,13 +448,12 @@ async def user_subjects(update: Update, page: int = 0):
         rows.append(nav)
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="u:back")])
     await edit_or_reply(update, "Home › Subjects\n\nChoose a subject:", InlineKeyboardMarkup(rows))
-
+    
+# Replace the existing user_chapters function with this:
 async def user_chapters(update: Update, subject: str, page: int = 0):
-    # store chosen subject for later steps
     if isinstance(update, Update):
         ctx_user_data = {}  # not used; kept for compatibility
 
-    # put into callback context via button handler; we still set it here for safety
     try:
         # If this was called from btn(), context.user_data is already set.
         pass
@@ -430,6 +469,11 @@ async def user_chapters(update: Update, subject: str, page: int = 0):
     slice_ = chs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
     rows = [[InlineKeyboardButton(f"📖 {c} (quizzes: {qs})", callback_data=f"u:chap:{c}")]
             for (c, qs) in slice_]
+    
+    # Add "All chapters mixed" button at the top
+    if page == 0:  # Only show on first page
+        rows.insert(0, [InlineKeyboardButton("🎯 All chapters mixed", callback_data=f"u:all_chapters_mixed:{subject}")])
+    
     if pages > 1:
         nav = []
         if page > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"u:chpp:{page-1}"))
@@ -440,6 +484,7 @@ async def user_chapters(update: Update, subject: str, page: int = 0):
     await edit_or_reply(update, f"Home › Subjects › *{subject}*\n\nChoose a chapter:",
                         InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
+# Replace the existing user_subjects_ai function with this:
 async def user_subjects_ai(update: Update, page: int = 0):
     subs = list_subjects_with_counts(ai_only=True)
     if not subs:
@@ -451,6 +496,11 @@ async def user_subjects_ai(update: Update, page: int = 0):
     slice_ = subs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
     rows = [[InlineKeyboardButton(f"🤖 {s} (chapters: {chs} | quizzes: {qs})", callback_data=f"uai:subj:{s}")]
             for (s, chs, qs) in slice_]
+    
+    # Add "All subjects mixed" button at the top for AI
+    if page == 0:  # Only show on first page
+        rows.insert(0, [InlineKeyboardButton("🎯 All subjects mixed (AI)", callback_data="uai:all_subjects_mixed")])
+    
     if pages > 1:
         nav = []
         if page > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"uai:subjp:{page-1}"))
@@ -460,6 +510,7 @@ async def user_subjects_ai(update: Update, page: int = 0):
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="u:back")])
     await edit_or_reply(update, "AI Gen › Subjects\n\nChoose a subject:", InlineKeyboardMarkup(rows))
 
+# Replace the existing user_chapters_ai function with this:
 async def user_chapters_ai(update: Update, subject: str, page: int = 0):
     chs = list_chapters_with_counts(subject, ai_only=True)
     if not chs:
@@ -471,6 +522,11 @@ async def user_chapters_ai(update: Update, subject: str, page: int = 0):
     slice_ = chs[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
     rows = [[InlineKeyboardButton(f"📖 {c} (quizzes: {qs})", callback_data=f"uai:chap:{c}")]
             for (c, qs) in slice_]
+    
+    # Add "All chapters mixed" button at the top for AI
+    if page == 0:  # Only show on first page
+        rows.insert(0, [InlineKeyboardButton("🎯 All chapters mixed (AI)", callback_data=f"uai:all_chapters_mixed:{subject}")])
+    
     if pages > 1:
         nav = []
         if page > 0: nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"uai:chpp:{page-1}"))
@@ -509,6 +565,7 @@ async def timer_menu_ai(update_or_query):
     await edit_or_reply(update_or_query, "AI Gen › Subjects › Chapter › Timer\n\nChoose time per question:",
                         InlineKeyboardMarkup(rows))
 
+# Replace the existing pre_quiz_screen function with this:
 async def pre_quiz_screen(q, context: ContextTypes.DEFAULT_TYPE):
     subj = context.user_data.get("subject")
     chap = context.user_data.get("chapter")
@@ -516,13 +573,23 @@ async def pre_quiz_screen(q, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["open_period"] = DEFAULT_OPEN_PERIOD
     op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
     timer_text = "Without Timer" if op == 0 else f"{op}s"
-    txt = (f"Home › Subjects › {subj} › {chap} › Timer\n\n"
-           f"Get ready!\n\nSubject: {subj}\nChapter: {chap}\nTimer: {timer_text}\n\n"
+    
+    # Handle mixed modes in display
+    if subj == "ALL_SUBJECTS" and chap == "MIXED":
+        display_text = "All Subjects Mixed"
+    elif chap == "ALL_CHAPTERS_MIXED":
+        display_text = f"{subj} - All Chapters Mixed"
+    else:
+        display_text = f"{subj} › {chap}"
+    
+    txt = (f"Home › {display_text} › Timer\n\n"
+           f"Get ready!\n\nMode: {display_text}\nTimer: {timer_text}\n\n"
            "Press the button when ready. Send /stop to cancel.")
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("I am ready!", callback_data="u:ready")],
                                [InlineKeyboardButton("⬅️ Back", callback_data="u:timerback")]])
     await q.message.edit_text(txt, reply_markup=kb)
 
+# Replace the existing pre_quiz_screen_ai function with this:
 async def pre_quiz_screen_ai(q, context: ContextTypes.DEFAULT_TYPE):
     subj = context.user_data.get("ai_subject")
     chap = context.user_data.get("ai_chapter")
@@ -530,86 +597,37 @@ async def pre_quiz_screen_ai(q, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["ai_open_period"] = DEFAULT_OPEN_PERIOD
     op = int(context.user_data.get("ai_open_period", DEFAULT_OPEN_PERIOD))
     timer_text = "Without Timer" if op == 0 else f"{op}s"
-    txt = (f"AI Gen › {subj} › {chap} › Timer\n\n"
-           f"Get ready!\n\nSubject: {subj}\nChapter: {chap}\nTimer: {timer_text}\n\n"
+    
+    # Handle mixed modes in display for AI
+    if subj == "ALL_SUBJECTS" and chap == "MIXED":
+        display_text = "All AI Subjects Mixed"
+    elif chap == "ALL_CHAPTERS_MIXED":
+        display_text = f"{subj} - All AI Chapters Mixed"
+    else:
+        display_text = f"{subj} › {chap}"
+    
+    txt = (f"AI Gen › {display_text} › Timer\n\n"
+           f"Get ready!\n\nMode: {display_text}\nTimer: {timer_text}\n\n"
            "Press the button when ready. Send /stop to cancel.")
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("I am ready!", callback_data="uai:ready")],
                                [InlineKeyboardButton("⬅️ Back", callback_data="uai:timerback")]])
     await q.message.edit_text(txt, reply_markup=kb)
 
-async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        subj = context.user_data.get("subject"); chap = context.user_data.get("chapter")
-        if not subj or not chap:
-            await q.message.edit_text("Please choose Subject and Chapter first.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:start")]]))
-            return
-        uid = q.from_user.id
-        if is_user_banned(uid):
-            await q.message.edit_text("You are banned from using this bot.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
-            return
-        chat_id = q.message.chat.id
-        op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
-
-        # ✅ validate quizzes up-front
-        ids = _collect_valid_quiz_ids(subj, chap, ai=False)
-        if not ids:
-            await q.message.edit_text("No valid quizzes found for this selection.",
-                                      reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]]))
-            return
-        random.shuffle(ids)
-
-        # save for retry
-        context.user_data["last_subject"] = subj
-        context.user_data["last_chapter"] = chap
-        context.user_data["last_open_period"] = op
-
-        conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
-        conn.execute("INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
-                     (uid, chat_id, len(ids), op, int(time.time()), "running"))
-        sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        for i, qid in enumerate(ids):
-            conn.execute("INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
-                         (sid, qid, "", 0, i))
-        conn.commit()
-
-        await q.message.edit_text("Quiz started! 🎯\nSend /stop to stop the quiz.")
-        await send_next_quiz(context.bot, sid)
-
-    except Exception as e:
-        log.error("begin_quiz_session error: %s\n%s", e, traceback.format_exc())
-        try:
-            await q.message.reply_text(
-                "Couldn't start quiz due to an error. Please check your items and try again."
-            )
-        except Exception:
-            pass
-
-# ------------ Start sessions ------------
-# --- validate & collect quiz ids before starting (handles bad data safely) ---
-def _collect_valid_quiz_ids(subject: str, chapter: str, ai: bool):
-    sql = "SELECT id, question, options_json, correct, explanation FROM quizzes WHERE subject=? AND chapter=? AND "
-    sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
-    rows = conn.execute(sql, (subject, chapter)).fetchall()
-    valid = []
-    for r in rows:
-        try:
-            opts = json.loads(r["options_json"])
-            # reuse the same sanitizer the poll uses (lengths, min options, etc.)
-            _q, _opts, _expl = sanitize_for_poll(r["question"], opts, r["explanation"])
-            # ensure correct index still points inside the (possibly de-duplicated) options
-            if 0 <= int(r["correct"]) < len(_opts):
-                valid.append(int(r["id"]))
-        except Exception:
-            # skip bad quiz silently
-            continue
-    return valid
-
+# Replace the existing begin_quiz_session function with this:
 async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
     try:
         subj = context.user_data.get("subject")
         chap = context.user_data.get("chapter")
+        
+        # Handle mixed modes
+        if subj == "ALL_SUBJECTS" and chap == "MIXED":
+            await begin_quiz_session_all_subjects_mixed(q, context)
+            return
+        elif chap == "ALL_CHAPTERS_MIXED":
+            await begin_quiz_session_all_chapters_mixed(q, context)
+            return
+        
+        # Original logic for specific subject/chapter
         if not subj or not chap:
             await q.message.edit_text(
                 "Please choose Subject and Chapter first.",
@@ -666,10 +684,336 @@ async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+# Add these functions after the existing begin_quiz_session functions
+async def begin_quiz_session_all_subjects_mixed(q, context: ContextTypes.DEFAULT_TYPE):
+    """Start quiz with all subjects mixed (human quizzes)"""
+    try:
+        uid = q.from_user.id
+        if is_user_banned(uid):
+            await q.message.edit_text(
+                "You are banned from using this bot.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        chat_id = q.message.chat.id
+        op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
+
+        # Collect all valid quiz IDs from all subjects
+        ids = _collect_valid_quiz_ids_all_subjects_mixed(ai=False)
+        if not ids:
+            await q.message.edit_text(
+                "No valid quizzes found.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        random.shuffle(ids)
+
+        # Limit to a reasonable number to avoid overwhelming users
+        ids = ids[:50]  # Maximum 50 questions
+
+        # Save for retry
+        context.user_data["last_subject"] = "ALL_SUBJECTS"
+        context.user_data["last_chapter"] = "MIXED"
+        context.user_data["last_open_period"] = op
+
+        conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
+        conn.execute(
+            "INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
+            (uid, chat_id, len(ids), op, int(time.time()), "running")
+        )
+        sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for i, qid in enumerate(ids):
+            conn.execute(
+                "INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
+                (sid, qid, "", 0, i)
+            )
+        conn.commit()
+
+        await q.message.edit_text("🎯 All Subjects Mixed Quiz started!\nSend /stop to stop the quiz.")
+        await send_next_quiz(context.bot, sid)
+
+    except Exception as e:
+        log.error("begin_quiz_session_all_subjects_mixed error: %s\n%s", e, traceback.format_exc())
+        try:
+            await q.message.reply_text(
+                "Couldn't start quiz due to an error. Please try again."
+            )
+        except Exception:
+            pass
+
+async def begin_quiz_session_all_chapters_mixed(q, context: ContextTypes.DEFAULT_TYPE):
+    """Start quiz with all chapters mixed of a subject (human quizzes)"""
+    try:
+        subj = context.user_data.get("subject")
+        if not subj:
+            await q.message.edit_text(
+                "Please choose Subject first.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:start")]])
+            )
+            return
+        uid = q.from_user.id
+        if is_user_banned(uid):
+            await q.message.edit_text(
+                "You are banned from using this bot.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        chat_id = q.message.chat.id
+        op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
+
+        # Collect all valid quiz IDs from all chapters of the subject
+        ids = _collect_valid_quiz_ids_all_chapters_mixed(subj, ai=False)
+        if not ids:
+            await q.message.edit_text(
+                "No valid quizzes found for this subject.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        random.shuffle(ids)
+
+        # Save for retry
+        context.user_data["last_subject"] = subj
+        context.user_data["last_chapter"] = "ALL_CHAPTERS_MIXED"
+        context.user_data["last_open_period"] = op
+
+        conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
+        conn.execute(
+            "INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
+            (uid, chat_id, len(ids), op, int(time.time()), "running")
+        )
+        sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for i, qid in enumerate(ids):
+            conn.execute(
+                "INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
+                (sid, qid, "", 0, i)
+            )
+        conn.commit()
+
+        await q.message.edit_text(f"🎯 {subj} - All Chapters Mixed Quiz started!\nSend /stop to stop the quiz.")
+        await send_next_quiz(context.bot, sid)
+
+    except Exception as e:
+        log.error("begin_quiz_session_all_chapters_mixed error: %s\n%s", e, traceback.format_exc())
+        try:
+            await q.message.reply_text(
+                "Couldn't start quiz due to an error. Please try again."
+            )
+        except Exception:
+            pass
+
+# Add these functions after the human mixed session functions
+async def begin_quiz_session_all_subjects_mixed_ai(q, context: ContextTypes.DEFAULT_TYPE):
+    """Start quiz with all subjects mixed (AI quizzes)"""
+    try:
+        uid = q.from_user.id
+        if is_user_banned(uid):
+            await q.message.edit_text(
+                "You are banned from using this bot.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        chat_id = q.message.chat.id
+        op = int(context.user_data.get("ai_open_period", DEFAULT_OPEN_PERIOD))
+
+        # Collect all valid quiz IDs from all AI subjects
+        ids = _collect_valid_quiz_ids_all_subjects_mixed(ai=True)
+        if not ids:
+            await q.message.edit_text(
+                "No valid AI quizzes found.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        random.shuffle(ids)
+
+        # Limit to a reasonable number
+        ids = ids[:50]  # Maximum 50 questions
+
+        conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
+        conn.execute(
+            "INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
+            (uid, chat_id, len(ids), op, int(time.time()), "running")
+        )
+        sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for i, qid in enumerate(ids):
+            conn.execute(
+                "INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
+                (sid, qid, "", 0, i)
+            )
+        conn.commit()
+
+        await q.message.edit_text("🤖🎯 All AI Subjects Mixed Quiz started!\nSend /stop to stop the quiz.")
+        await send_next_quiz(context.bot, sid)
+
+    except Exception as e:
+        log.error("begin_quiz_session_all_subjects_mixed_ai error: %s\n%s", e, traceback.format_exc())
+        try:
+            await q.message.reply_text(
+                "Couldn't start AI quiz due to an error. Please try again."
+            )
+        except Exception:
+            pass
+
+async def begin_quiz_session_all_chapters_mixed_ai(q, context: ContextTypes.DEFAULT_TYPE):
+    """Start quiz with all chapters mixed of a subject (AI quizzes)"""
+    try:
+        subj = context.user_data.get("ai_subject")
+        if not subj:
+            await q.message.edit_text(
+                "Please choose Subject first.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="uai:start")]])
+            )
+            return
+        uid = q.from_user.id
+        if is_user_banned(uid):
+            await q.message.edit_text(
+                "You are banned from using this bot.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        chat_id = q.message.chat.id
+        op = int(context.user_data.get("ai_open_period", DEFAULT_OPEN_PERIOD))
+
+        # Collect all valid quiz IDs from all chapters of the AI subject
+        ids = _collect_valid_quiz_ids_all_chapters_mixed(subj, ai=True)
+        if not ids:
+            await q.message.edit_text(
+                "No valid AI quizzes found for this subject.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        random.shuffle(ids)
+
+        conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
+        conn.execute(
+            "INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
+            (uid, chat_id, len(ids), op, int(time.time()), "running")
+        )
+        sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for i, qid in enumerate(ids):
+            conn.execute(
+                "INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
+                (sid, qid, "", 0, i)
+            )
+        conn.commit()
+
+        await q.message.edit_text(f"🤖🎯 {subj} - All AI Chapters Mixed Quiz started!\nSend /stop to stop the quiz.")
+        await send_next_quiz(context.bot, sid)
+
+    except Exception as e:
+        log.error("begin_quiz_session_all_chapters_mixed_ai error: %s\n%s", e, traceback.format_exc())
+        try:
+            await q.message.reply_text(
+                "Couldn't start AI quiz due to an error. Please try again."
+            )
+        except Exception:
+            pass
+
+# ------------ Start sessions ------------
+# --- validate & collect quiz ids before starting (handles bad data safely) ---
+def _collect_valid_quiz_ids(subject: str, chapter: str, ai: bool):
+    sql = "SELECT id, question, options_json, correct, explanation FROM quizzes WHERE subject=? AND chapter=? AND "
+    sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
+    rows = conn.execute(sql, (subject, chapter)).fetchall()
+    valid = []
+    for r in rows:
+        try:
+            opts = json.loads(r["options_json"])
+            # reuse the same sanitizer the poll uses (lengths, min options, etc.)
+            _q, _opts, _expl = sanitize_for_poll(r["question"], opts, r["explanation"])
+            # ensure correct index still points inside the (possibly de-duplicated) options
+            if 0 <= int(r["correct"]) < len(_opts):
+                valid.append(int(r["id"]))
+        except Exception:
+            # skip bad quiz silently
+            continue
+    return valid
+
+# Replace the existing begin_quiz_session function with this:
+async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        subj = context.user_data.get("subject")
+        chap = context.user_data.get("chapter")
+        
+        # Handle mixed modes
+        if subj == "ALL_SUBJECTS" and chap == "MIXED":
+            await begin_quiz_session_all_subjects_mixed(q, context)
+            return
+        elif chap == "ALL_CHAPTERS_MIXED":
+            await begin_quiz_session_all_chapters_mixed(q, context)
+            return
+        
+        # Original logic for specific subject/chapter
+        if not subj or not chap:
+            await q.message.edit_text(
+                "Please choose Subject and Chapter first.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:start")]])
+            )
+            return
+        uid = q.from_user.id
+        if is_user_banned(uid):
+            await q.message.edit_text(
+                "You are banned from using this bot.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        chat_id = q.message.chat.id
+        op = int(context.user_data.get("open_period", DEFAULT_OPEN_PERIOD))
+
+        # ✅ validate quizzes up-front (human-only)
+        ids = _collect_valid_quiz_ids(subj, chap, ai=False)
+        if not ids:
+            await q.message.edit_text(
+                "No valid quizzes found for this selection.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+            )
+            return
+        random.shuffle(ids)
+
+        # save for retry
+        context.user_data["last_subject"] = subj
+        context.user_data["last_chapter"] = chap
+        context.user_data["last_open_period"] = op
+
+        conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
+        conn.execute(
+            "INSERT INTO sessions(user_id,chat_id,total,open_period,started_at,state) VALUES(?,?,?,?,?,?)",
+            (uid, chat_id, len(ids), op, int(time.time()), "running")
+        )
+        sid = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        for i, qid in enumerate(ids):
+            conn.execute(
+                "INSERT INTO session_items(session_id,quiz_id,poll_id,message_id,idx) VALUES(?,?,?,?,?)",
+                (sid, qid, "", 0, i)
+            )
+        conn.commit()
+
+        await q.message.edit_text("Quiz started! 🎯\nSend /stop to stop the quiz.")
+        await send_next_quiz(context.bot, sid)
+
+    except Exception as e:
+        log.error("begin_quiz_session error: %s\n%s", e, traceback.format_exc())
+        try:
+            await q.message.reply_text(
+                "Couldn't start quiz due to an error. Please check your items and try again."
+            )
+        except Exception:
+            pass
+
+# Replace the existing begin_quiz_session_ai function with this:
 async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
     try:
         subj = context.user_data.get("ai_subject")
         chap = context.user_data.get("ai_chapter")
+        
+        # Handle mixed modes for AI
+        if subj == "ALL_SUBJECTS" and chap == "MIXED":
+            await begin_quiz_session_all_subjects_mixed_ai(q, context)
+            return
+        elif chap == "ALL_CHAPTERS_MIXED":
+            await begin_quiz_session_all_chapters_mixed_ai(q, context)
+            return
+        
+        # Original logic for specific AI subject/chapter
         if not subj or not chap:
             await q.message.edit_text(
                 "Please choose Subject and Chapter first.",
@@ -1752,6 +2096,18 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "u:back":
         await q.message.edit_text("Menu:", reply_markup=main_menu(uid)); return
 
+    # Add these in the human quiz section:
+    if data == "u:all_subjects_mixed":
+        context.user_data["subject"] = "ALL_SUBJECTS"
+        context.user_data["chapter"] = "MIXED"
+        await timer_menu(update); return
+
+    if data.startswith("u:all_chapters_mixed:"):
+        subject = data.split(":", 2)[2]
+        context.user_data["subject"] = subject
+        context.user_data["chapter"] = "ALL_CHAPTERS_MIXED"
+        await timer_menu(update); return
+
     # AI menu
     if data == "uai:start": await user_subjects_ai(update); return
     if data.startswith("uai:subjp:"): await user_subjects_ai(update, int(data.split(":")[2])); return
@@ -1767,6 +2123,16 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["ai_open_period"] = int(data.split(":")[2]); await pre_quiz_screen_ai(q, context); return
     if data == "uai:timerback": await timer_menu_ai(update); return
     if data == "uai:ready": await begin_quiz_session_ai(q, context); return
+    if data == "uai:all_subjects_mixed":
+        context.user_data["ai_subject"] = "ALL_SUBJECTS"
+        context.user_data["ai_chapter"] = "MIXED"
+        await timer_menu_ai(update); return
+
+    if data.startswith("uai:all_chapters_mixed:"):
+        subject = data.split(":", 2)[2]
+        context.user_data["ai_subject"] = subject
+        context.user_data["ai_chapter"] = "ALL_CHAPTERS_MIXED"
+        await timer_menu_ai(update); return
 
     # admin dispatch
     if data.startswith("a:"):
