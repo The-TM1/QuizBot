@@ -105,6 +105,29 @@ def db_init():
             created_at INTEGER NOT NULL
         );
     """)
+    # Custom buttons tables
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS custom_buttons(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            button_text TEXT NOT NULL,
+            parent_id INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            sort_order INTEGER DEFAULT 0
+        );
+    """)
+    
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS custom_button_content(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            button_id INTEGER NOT NULL,
+            content_type TEXT NOT NULL,
+            content_text TEXT,
+            file_id TEXT,
+            file_type TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );
+    """)
     conn.commit()
     # migrations (idempotent)
     _add_col("quizzes", "explanation", "TEXT")
@@ -118,6 +141,79 @@ def db_init():
 # ------------ Helpers ------------
 
 pending_contact = {}
+
+def get_custom_buttons(parent_id=0):
+    """Get custom buttons by parent_id"""
+    return conn.execute(
+        "SELECT id, button_text FROM custom_buttons WHERE parent_id=? ORDER BY sort_order, id",
+        (parent_id,)
+    ).fetchall()
+
+def get_custom_button(button_id):
+    """Get single custom button"""
+    return conn.execute("SELECT * FROM custom_buttons WHERE id=?", (button_id,)).fetchone()
+
+def add_custom_button(button_text, parent_id=0):
+    """Add a new custom button"""
+    max_order = conn.execute(
+        "SELECT MAX(sort_order) FROM custom_buttons WHERE parent_id=?", (parent_id,)
+    ).fetchone()[0] or 0
+    
+    conn.execute(
+        "INSERT INTO custom_buttons(button_text, parent_id, created_at, sort_order) "
+        "VALUES(?,?,?,?)",
+        (button_text, parent_id, int(time.time()), max_order + 1)
+    )
+    conn.commit()
+    return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+def delete_custom_button(button_id):
+    """Delete custom button and its children and content"""
+    # First delete content
+    conn.execute("DELETE FROM custom_button_content WHERE button_id=?", (button_id,))
+    # Then delete children buttons
+    conn.execute("DELETE FROM custom_buttons WHERE parent_id=?", (button_id,))
+    # Then delete the button itself
+    conn.execute("DELETE FROM custom_buttons WHERE id=?", (button_id,))
+    conn.commit()
+
+def get_custom_button_content(button_id):
+    """Get all content for a button"""
+    return conn.execute(
+        "SELECT * FROM custom_button_content WHERE button_id=? ORDER BY sort_order, id",
+        (button_id,)
+    ).fetchall()
+
+def add_custom_button_content(button_id, content_type, content_text=None, file_id=None, file_type=None):
+    """Add content to a button"""
+    max_order = conn.execute(
+        "SELECT MAX(sort_order) FROM custom_button_content WHERE button_id=?", (button_id,)
+    ).fetchone()[0] or 0
+    
+    conn.execute(
+        "INSERT INTO custom_button_content(button_id, content_type, content_text, file_id, file_type, sort_order, created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (button_id, content_type, content_text, file_id, file_type, max_order + 1, int(time.time()))
+    )
+    conn.commit()
+    return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+def delete_custom_button_content(content_id):
+    """Delete specific content item"""
+    conn.execute("DELETE FROM custom_button_content WHERE id=?", (content_id,))
+    conn.commit()
+
+def get_button_path(button_id):
+    """Get the path of a button for display"""
+    path = []
+    current = get_custom_button(button_id)
+    while current:
+        path.insert(0, current['button_text'])
+        if current['parent_id'] > 0:
+            current = get_custom_button(current['parent_id'])
+        else:
+            break
+    return " › ".join(path)
 
 # Add this in the "Helpers" section after the existing functions
 def _collect_valid_quiz_ids_all_subjects_mixed(ai: bool):
@@ -366,6 +462,12 @@ def main_menu(uid: int):
          InlineKeyboardButton("📨 Contact admin", callback_data="u:contact")],
         [InlineKeyboardButton("ℹ️ Help", callback_data="u:help")]
     ]
+    
+    # Add custom buttons
+    custom_buttons = get_custom_buttons(0)
+    for btn in custom_buttons:
+        rows.insert(1, [InlineKeyboardButton(btn["button_text"], callback_data=f"cb:{btn['id']}")])
+    
     if has_ai_quizzes():
         rows.insert(1, [InlineKeyboardButton("🤖 AI Gen Quiz", callback_data="uai:start")])
     if is_admin(uid):
@@ -373,7 +475,7 @@ def main_menu(uid: int):
     if is_owner(uid):
         rows[1].insert(0, InlineKeyboardButton("🏆 Leaderboard", callback_data="u:lb"))
     return InlineKeyboardMarkup(rows)
-
+    
 def admin_menu(uid: int):
     if not is_owner(uid):
         return InlineKeyboardMarkup([
@@ -389,6 +491,8 @@ def admin_menu(uid: int):
          InlineKeyboardButton("#️⃣ Count", callback_data="a:count")],
         [InlineKeyboardButton("📣 Broadcast", callback_data="a:broadcast"),
          InlineKeyboardButton("🔎 Search Quiz id", callback_data="a:search_id")],
+        [InlineKeyboardButton("🗑️ Delete Quizzes", callback_data="a:delete_quizzes")],  # NEW
+        [InlineKeyboardButton("🆕 Add New Button", callback_data="a:custom_buttons")],  # NEW
         [InlineKeyboardButton("👑 Admins", callback_data="a:admins"),
          InlineKeyboardButton("👥 Users", callback_data="a:users")],
         [InlineKeyboardButton("🗂 Export users DB", callback_data="a:export_users"),
@@ -1421,6 +1525,121 @@ async def user_detail_panel(q, tgt: int):
     await q.message.edit_text(f"Users › {name}\n\nUser id: {tgt}\nStatus: {'BANNED' if banned else 'Active'}",
                               reply_markup=InlineKeyboardMarkup(rows))
 
+# custom buttons panel function
+async def custom_buttons_panel(q, parent_id=0):
+    uid = q.from_user.id
+    if not is_owner(uid):
+        await notify_owner_unauthorized(q.bot, uid, "custom_buttons_panel")
+        await q.message.edit_text("👉 Owner only.", reply_markup=admin_menu(uid))
+        return
+    
+    buttons = get_custom_buttons(parent_id)
+    parent_button = get_custom_button(parent_id) if parent_id > 0 else None
+    
+    # Build title
+    if parent_button:
+        title = f"Custom Buttons › {parent_button['button_text']}"
+    else:
+        title = "Custom Buttons"
+    
+    rows = []
+    for btn in buttons:
+        has_content = " 📄" if btn['content_type'] else ""
+        has_children = " 📁" if get_custom_buttons(btn['id']) else ""
+        button_text = f"{btn['button_text']}{has_content}{has_children}"
+        
+        # Use manage callback for existing buttons
+        rows.append([
+            InlineKeyboardButton(button_text, callback_data=f"a:custom_buttons:manage:{btn['id']}")
+        ])
+    
+    # Action buttons - ALWAYS show these
+    action_row = []
+    action_row.append(InlineKeyboardButton("➕ Add Button", callback_data=f"a:custom_buttons:add_button:{parent_id}"))
+    
+    # Allow adding content to any button (not just empty ones)
+    if parent_id > 0:
+        action_row.append(InlineKeyboardButton("📝 Add Content", callback_data=f"a:custom_buttons:add_content:{parent_id}"))
+    
+    if action_row:
+        rows.append(action_row)
+    
+    # Navigation
+    nav_row = []
+    if parent_id > 0:
+        parent_parent_id = parent_button['parent_id'] if parent_button else 0
+        nav_row.append(InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:view:{parent_parent_id}"))
+    else:
+        nav_row.append(InlineKeyboardButton("⬅️ Back", callback_data="a:panel"))
+    
+    rows.append(nav_row)
+    
+    await q.message.edit_text(
+        f"{title}\n\nManage custom buttons for the main menu.",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+# custom buttons management panel function
+async def custom_button_manage_panel(q, button_id):
+    uid = q.from_user.id
+    if not is_owner(uid):
+        await notify_owner_unauthorized(q.bot, uid, "custom_button_manage_panel")
+        await q.message.edit_text("👉 Owner only.", reply_markup=admin_menu(uid))
+        return
+    
+    button = get_custom_button(button_id)
+    if not button:
+        await q.message.edit_text("Button not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:custom_buttons")]]))
+        return
+    
+    # Get all content for this button
+    content_items = conn.execute(
+        "SELECT id, content_type, content_text, file_type FROM custom_buttons WHERE id=? AND content_type IS NOT NULL",
+        (button_id,)
+    ).fetchall()
+    
+    rows = []
+    
+    # Button management
+    rows.append([InlineKeyboardButton("✏️ Edit Button Name", callback_data=f"a:custom_buttons:edit:{button_id}")])
+    rows.append([InlineKeyboardButton("🗑️ Delete This Button", callback_data=f"a:custom_buttons:delete:{button_id}")])
+    
+    # Content management
+    rows.append([InlineKeyboardButton("📝 Add Text Content", callback_data=f"a:custom_content_type:text:{button_id}")])
+    rows.append([InlineKeyboardButton("📎 Add Document Content", callback_data=f"a:custom_content_type:document:{button_id}")])
+    
+    # Show existing content with delete options
+    if content_items:
+        rows.append([InlineKeyboardButton("📋 Current Content:", callback_data="noop")])
+        for item in content_items:
+            content_type = item['content_type']
+            if content_type == 'text':
+                preview = item['content_text'][:30] + "..." if len(item['content_text']) > 30 else item['content_text']
+                rows.append([InlineKeyboardButton(f"❌ Delete Text: {preview}", callback_data=f"a:custom_content_delete:text:{button_id}")])
+            elif content_type == 'document':
+                file_type = item['file_type'] or 'Document'
+                rows.append([InlineKeyboardButton(f"❌ Delete {file_type}", callback_data=f"a:custom_content_delete:document:{button_id}")])
+    
+    # Sub-buttons management
+    sub_buttons = get_custom_buttons(button_id)
+    if sub_buttons:
+        rows.append([InlineKeyboardButton("👀 View Sub-Buttons", callback_data=f"a:custom_buttons:view:{button_id}")])
+    
+    # Navigation
+    parent_id = button['parent_id']
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:view:{parent_id}")])
+    
+    await q.message.edit_text(
+        f"🛠️ Managing: *{button['button_text']}*\n\n"
+        "You can:\n"
+        "• Edit button name\n"
+        "• Add/delete content\n"
+        "• Delete this button\n\n"
+        "*All content will be sent together when users click this button.*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
 # ------------ Admin callbacks (includes Export fix & Search ID) ------------
 async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1665,7 +1884,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.edit_text("Removed.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:admins")]]))
         return
 
-    # ---- counters / broadcast / users DB / AI import / search id ----
+    # ---- counters / broadcast / users DB / AI import / search id / Delete Quizzes / custom buttons ----
     if act == "count":
         r = conn.execute("SELECT COUNT(*) c FROM quizzes").fetchone()
         await q.message.edit_text(f"Total quizzes: {r['c']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
@@ -1695,6 +1914,211 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.edit_text("Send the *quiz* (forward the Quiz-type poll) or paste the *exact question text*.",
                                   parse_mode="Markdown",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        return
+
+    # Delete Quizzes admin callbacks
+    if act == "delete_quizzes":
+        context.user_data["mode"] = "DELETE_QUIZZES"
+        context.user_data["delete_quizzes_polls"] = []
+        await q.message.edit_text(
+            "🗑️ *Delete Quizzes Mode*\n\n"
+            "Forward quiz polls that you want to delete from the database.\n\n"
+            "*I will collect them silently.*\n\n"
+            "When done, press 'Confirm Delete' to remove them permanently.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirm Delete", callback_data="a:delete_quizzes_confirm")],
+                [InlineKeyboardButton("📊 Show Collected", callback_data="a:delete_quizzes_show")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="a:delete_quizzes_cancel")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]
+            ])
+        )
+        return
+
+    if act == "delete_quizzes_show":
+        polls = context.user_data.get("delete_quizzes_polls", [])
+        if not polls:
+            await q.answer("No polls collected yet", show_alert=True)
+            return
+            
+        message = f"📊 *Collected Polls for Deletion:* {len(polls)}\n\n"
+        for i, poll_data in enumerate(polls, 1):
+            message += f"{i}. {poll_data['question'][:50]}...\n"
+        
+        await q.message.edit_text(
+            message,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirm Delete", callback_data="a:delete_quizzes_confirm")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="a:delete_quizzes_cancel")],
+                [InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]
+            ])
+        )
+        return
+
+    if act == "delete_quizzes_confirm":
+        polls = context.user_data.get("delete_quizzes_polls", [])
+        if not polls:
+            await q.message.edit_text("No polls collected for deletion.", 
+                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+            context.user_data["mode"] = None
+            return
+            
+        deleted_count = 0
+        deleted_details = []
+        
+        for poll_data in polls:
+            try:
+                # Clean question text
+                question_clean = re.sub(r'^[\(\[]\d+/\d+[\)\]]\s*', '', poll_data['question'])
+                
+                # Find and delete ALL matching quizzes (not just first match)
+                rows = conn.execute(
+                    "SELECT id, subject, chapter FROM quizzes WHERE question=?",
+                    (question_clean,)
+                ).fetchall()
+                
+                for row in rows:
+                    # Check if options match
+                    db_options_json = conn.execute(
+                        "SELECT options_json FROM quizzes WHERE id=?", (row['id'],)
+                    ).fetchone()["options_json"]
+                    
+                    db_options = json.loads(db_options_json)
+                    if db_options == poll_data['options']:
+                        conn.execute("DELETE FROM quizzes WHERE id=?", (row['id'],))
+                        conn.execute("DELETE FROM admin_log WHERE quiz_id=?", (row['id'],))
+                        deleted_count += 1
+                        deleted_details.append(f"ID {row['id']}: {row['subject']} › {row['chapter']}")
+                    
+            except Exception as e:
+                log.error(f"Error deleting quiz: {e}")
+                continue  # Continue with next poll even if one fails
+        
+        conn.commit()
+        
+        # Generate report
+        report = f"🗑️ *Deletion Complete*\n\n"
+        report += f"Deleted quizzes: *{deleted_count}*\n"
+        report += f"Total polls processed: *{len(polls)}*\n\n"
+        
+        if deleted_details:
+            report += "*Deleted Quizzes:*\n"
+            for detail in deleted_details[:15]:  # Show more details
+                report += f"• {detail}\n"
+            if len(deleted_details) > 15:
+                report += f"... and {len(deleted_details) - 15} more\n"
+        else:
+            report += "No matching quizzes found for deletion."
+        
+        await q.message.edit_text(report, parse_mode="Markdown",
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        
+        context.user_data["mode"] = None
+        context.user_data["delete_quizzes_polls"] = []
+        return
+
+    if act == "delete_quizzes_cancel":
+        context.user_data["mode"] = None
+        context.user_data["delete_quizzes_polls"] = []
+        await q.message.edit_text("❌ Delete operation cancelled.", 
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
+        return
+
+    # custom buttons admin callbacks
+    if act == "custom_buttons":
+        await custom_buttons_panel(q, 0)
+        return
+
+    if act.startswith("custom_buttons:"):
+        parts = act.split(":")
+        if len(parts) >= 3:
+            action = parts[1]
+            button_id = int(parts[2]) if parts[2].isdigit() else 0
+            
+            if action == "view":
+                await custom_buttons_panel(q, button_id)
+            elif action == "add_button":
+                context.user_data["custom_button_parent"] = button_id
+                context.user_data["mode"] = "CUSTOM_BUTTON_ADD"
+                await q.message.edit_text(
+                    "Send the name for the new button:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:view:{button_id}")]])
+                )
+            elif action == "add_content":
+                context.user_data["custom_button_edit"] = button_id
+                context.user_data["mode"] = "CUSTOM_BUTTON_CONTENT_TYPE"
+                await q.message.edit_text(
+                    "Choose content type to add:",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("📝 Text", callback_data=f"a:custom_content_type:text:{button_id}")],
+                        [InlineKeyboardButton("📎 Document/PDF", callback_data=f"a:custom_content_type:document:{button_id}")],
+                        [InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:view:{button_id}")]
+                    ])
+                )
+            elif action == "edit":
+                context.user_data["custom_button_edit"] = button_id
+                context.user_data["mode"] = "CUSTOM_BUTTON_EDIT"
+                await q.message.edit_text(
+                    "Send the new name for this button:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:view:{button_id}")]])
+                )
+            elif action == "delete":
+                button = get_custom_button(button_id)
+                if button:
+                    delete_custom_button(button_id)
+                    parent_id = button['parent_id']
+                    await q.message.edit_text(
+                        f"✅ Button '{button['button_text']}' deleted!",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:view:{parent_id}")]])
+                    )
+            elif action == "manage":
+                await custom_button_manage_panel(q, button_id)
+        return
+
+    if act.startswith("custom_content_type:"):
+        parts = act.split(":")
+        content_type = parts[1]
+        button_id = int(parts[2])
+        
+        context.user_data["custom_button_edit"] = button_id
+        context.user_data["custom_content_type"] = content_type
+        
+        if content_type == "text":
+            context.user_data["mode"] = "CUSTOM_BUTTON_CONTENT_TEXT"
+            await q.message.edit_text(
+                "Send the text content:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:manage:{button_id}")]])
+            )
+        elif content_type == "document":
+            context.user_data["mode"] = "CUSTOM_BUTTON_CONTENT_DOCUMENT"
+            await q.message.edit_text(
+                "Send the document or PDF file:",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:manage:{button_id}")]])
+            )
+        return
+
+    if act.startswith("custom_content_delete:"):
+        parts = act.split(":")
+        content_type = parts[1]
+        content_id = int(parts[2])  # Changed from button_id to content_id
+        
+        # Get the button_id before deleting so we can return to the manage panel
+        content_item = conn.execute("SELECT button_id FROM custom_button_content WHERE id=?", (content_id,)).fetchone()
+        if not content_item:
+            await q.message.edit_text("Content not found.", 
+                                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:custom_buttons")]]))
+            return
+            
+        button_id = content_item['button_id']
+        
+        # Delete the specific content item
+        delete_custom_button_content(content_id)
+        
+        await q.message.edit_text(
+            "✅ Content deleted!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:custom_buttons:manage:{button_id}")]])
+        )
         return
 
 # ------------ Command helpers: edit/del subject/chapter ------------
@@ -1775,8 +2199,10 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.poll:
             p = update.message.poll
             qtxt = p.question
+            # Remove number prefixes like "(2/30)" or "[2/30]"
+            qtxt_clean = re.sub(r'^[\(\[]\d+/\d+[\)\]]\s*', '', qtxt)
             opts = [o.text for o in p.options]
-            cand = conn.execute("SELECT id, question, options_json, correct, subject, chapter FROM quizzes WHERE question=?", (qtxt,)).fetchall()
+            cand = conn.execute("SELECT id, question, options_json, correct, subject, chapter FROM quizzes WHERE question=?", (qtxt_clean,)).fetchall()
             matches = []
             for r in cand:
                 try:
@@ -1794,7 +2220,9 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("\n".join(lines))
         elif update.message.text:
             qtxt = update.message.text.strip()
-            rows = conn.execute("SELECT id, subject, chapter FROM quizzes WHERE question LIKE ? ORDER BY id LIMIT 10", (f"%{qtxt}%",)).fetchall()
+            # Also clean text input in case it has number prefixes
+            qtxt_clean = re.sub(r'^[\(\[]\d+/\d+[\)\]]\s*', '', qtxt)
+            rows = conn.execute("SELECT id, subject, chapter FROM quizzes WHERE question LIKE ? ORDER BY id LIMIT 10", (f"%{qtxt_clean}%",)).fetchall()
             if not rows:
                 await update.message.reply_text("No match.")
             else:
@@ -1803,6 +2231,115 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append(f"• id:{r['id']} — {r['subject']} › {r['chapter']}")
                 await update.message.reply_text("\n".join(lines))
         context.user_data["mode"] = None
+        return
+
+    # Delete quizzes polls collection
+    if mode == "DELETE_QUIZZES" and update.message and update.message.poll:
+        if not is_owner(uid):
+            await notify_owner_unauthorized(context.bot, uid, "DELETE_QUIZZES_POLL")
+            await update.message.reply_text("👉 Owner only."); return
+            
+        poll = update.message.poll
+        if poll.type != "quiz":
+            await update.message.reply_text("Please send only quiz-type polls for deletion.")
+            return
+            
+        # Add poll to collection
+        poll_data = {
+            'question': poll.question,
+            'options': [o.text for o in poll.options],
+            'correct_option': poll.correct_option_id
+        }
+        context.user_data["delete_quizzes_polls"].append(poll_data)
+        
+        # Delete the poll message to keep chat clean
+        try:
+            await update.message.delete()
+        except Exception:
+            pass  # Ignore if we can't delete the message
+            
+        # No confirmation message - just silently collect
+        return
+
+    # Custom buttons (text_or_poll)
+    # Custom buttons - add button
+    if mode == "CUSTOM_BUTTON_ADD" and update.message and update.message.text:
+        if not is_owner(uid):
+            await notify_owner_unauthorized(context.bot, uid, "CUSTOM_BUTTON_ADD")
+            return
+            
+        button_text = update.message.text.strip()
+        parent_id = context.user_data.get("custom_button_parent", 0)
+        
+        if not button_text:
+            await update.message.reply_text("Button name cannot be empty.")
+            return
+            
+        add_custom_button(button_text, parent_id)
+        await update.message.reply_text(f"✅ Button '{button_text}' added!")
+        
+        context.user_data["mode"] = None
+        context.user_data["custom_button_parent"] = None
+        await custom_buttons_panel(update, parent_id)
+        return
+
+    # Custom buttons - edit button name
+    if mode == "CUSTOM_BUTTON_EDIT" and update.message and update.message.text:
+        if not is_owner(uid):
+            await notify_owner_unauthorized(context.bot, uid, "CUSTOM_BUTTON_EDIT")
+            return
+            
+        button_id = context.user_data.get("custom_button_edit")
+        new_name = update.message.text.strip()
+        
+        if not new_name:
+            await update.message.reply_text("Button name cannot be empty.")
+            return
+            
+        conn.execute("UPDATE custom_buttons SET button_text=? WHERE id=?", (new_name, button_id))
+        conn.commit()
+        await update.message.reply_text(f"✅ Button renamed to '{new_name}'!")
+        
+        context.user_data["mode"] = None
+        context.user_data["custom_button_edit"] = None
+        button = get_custom_button(button_id)
+        await custom_buttons_panel(update, button['parent_id'] if button else 0)
+        return
+
+    # Custom buttons - add text content
+    if mode == "CUSTOM_BUTTON_CONTENT_TEXT" and update.message and update.message.text:
+        if not is_owner(uid):
+            await notify_owner_unauthorized(context.bot, uid, "CUSTOM_BUTTON_CONTENT_TEXT")
+            return
+            
+        button_id = context.user_data.get("custom_button_edit")
+        content_text = update.message.text
+        
+        add_custom_button_content(button_id, "text", content_text=content_text)
+        await update.message.reply_text("✅ Text content added!")
+        
+        context.user_data["mode"] = None
+        context.user_data["custom_button_edit"] = None
+        await custom_button_manage_panel(update, button_id)
+        return
+
+    # Custom buttons - add document content
+    if mode == "CUSTOM_BUTTON_CONTENT_DOCUMENT" and update.message and update.message.document:
+        if not is_owner(uid):
+            await notify_owner_unauthorized(context.bot, uid, "CUSTOM_BUTTON_CONTENT_DOCUMENT")
+            return
+            
+        button_id = context.user_data.get("custom_button_edit")
+        document = update.message.document
+        file_id = document.file_id
+        file_type = document.mime_type or "document"
+        
+        add_custom_button_content(button_id, "document", file_id=file_id, file_type=file_type)
+        await update.message.reply_text("✅ Document content added!")
+        
+        context.user_data["mode"] = None
+        context.user_data["custom_button_edit"] = None
+        await custom_button_manage_panel(update, button_id)
         return
 
     # owner sends message to specific user
@@ -1976,7 +2513,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = None
         return
 
-        # contact admin → owner only
+    # contact admin → owner only
     logging.info(f"[contact-debug] text_or_poll called; uid={uid}; msg={(update.message.text if update.message else None)}")
     if pending_contact.get(uid) and update.message:
         u = update.effective_user
@@ -2145,6 +2682,74 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["subject"] = subject
         context.user_data["chapter"] = "ALL_CHAPTERS_MIXED"
         await timer_menu(update); return
+
+    # Custom buttons for users
+    if data.startswith("cb:"):
+        button_id = int(data.split(":")[1])
+        button = get_custom_button(button_id)
+        
+        if not button:
+            await q.message.edit_text("Button not found.", reply_markup=main_menu(uid))
+            return
+            
+        # Check if it has sub-buttons
+        sub_buttons = get_custom_buttons(button_id)
+        if sub_buttons:
+            # Show sub-buttons
+            rows = []
+            for sub_btn in sub_buttons:
+                has_content = " 📄" if get_custom_button_content(sub_btn['id']) else ""
+                rows.append([InlineKeyboardButton(
+                    f"{sub_btn['button_text']}{has_content}", 
+                    callback_data=f"cb:{sub_btn['id']}"
+                )])
+            rows.append([InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:back")])
+            await q.message.edit_text(
+                f"{button['button_text']}\n\nSelect an option:",
+                reply_markup=InlineKeyboardMarkup(rows)
+            )
+        else:
+            # Show ALL content for this button
+            content_items = get_custom_button_content(button_id)
+            if content_items:
+                sent_count = 0
+                for content in content_items:
+                    try:
+                        if content['content_type'] == 'text':
+                            # Send text as a separate message (not in menu)
+                            await q.message.reply_text(
+                                content['content_text'],
+                                parse_mode="Markdown"
+                            )
+                            sent_count += 1
+                        elif content['content_type'] == 'document':
+                            # Send document
+                            await q.message.reply_document(
+                                content['file_id'],
+                                caption=content['content_text']
+                            )
+                            sent_count += 1
+                    except Exception as e:
+                        log.error(f"Error sending content: {e}")
+                        continue
+                
+                if sent_count > 0:
+                    # Only show menu after sending all content
+                    await q.message.reply_text(
+                        f"📚 Content from: {button['button_text']}",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:back")]])
+                    )
+                else:
+                    await q.message.edit_text(
+                        "❌ Could not load content. Please try again.",
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:back")]])
+                    )
+            else:
+                await q.message.edit_text(
+                    "No content available for this button yet.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:back")]])
+                )
+        return
 
     # AI menu
     if data == "uai:start": await user_subjects_ai(update); return
