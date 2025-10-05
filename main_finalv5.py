@@ -1743,7 +1743,8 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mass_check_polls"] = []
         await q.message.edit_text(
             "🔍 *Mass Check Mode Activated*\n\n"
-            "Now forward multiple quiz polls to me one by one. I'll collect them and check which ones exist in the database.\n\n"
+            "Now forward multiple quiz polls to me one by one. I'll collect them silently.\n\n"
+            "*No confirmation messages will be sent.*\n\n"
             "When you're done, press the 'Finish & Check' button below.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
@@ -1753,7 +1754,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
         )
         return
-
+        
     if act == "mass_check_finish":
         polls = context.user_data.get("mass_check_polls", [])
         if not polls:
@@ -1983,16 +1984,13 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         context.user_data["mass_check_polls"].append(poll_data)
         
-        count = len(context.user_data["mass_check_polls"])
-        await update.message.reply_text(
-            f"✅ Poll added to mass check collection. Total collected: *{count}*\n\n"
-            "Continue forwarding more polls or press 'Finish & Check' when done.",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Finish & Check", callback_data="a:mass_check_finish")],
-                [InlineKeyboardButton("❌ Cancel", callback_data="a:mass_check_cancel")]
-            ])
-        )
+        # Delete the poll message to keep chat clean
+        try:
+            await update.message.delete()
+        except Exception:
+            pass  # Ignore if we can't delete the message
+            
+        # No confirmation message - just silently collect
         return
 
     # owner sends message to specific user
