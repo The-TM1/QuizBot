@@ -1594,35 +1594,35 @@ async def custom_button_manage_panel(q, button_id):
         await q.message.edit_text("Button not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:custom_buttons")]]))
         return
     
-    # Get all content for this button from the correct table
+    # Get all content for this button
     content_items = get_custom_button_content(button_id)
     
     rows = []
     
     # Button management
     rows.append([InlineKeyboardButton("✏️ Edit Button Name", callback_data=f"a:custom_buttons:edit:{button_id}")])
+    rows.append([InlineKeyboardButton("➕ Add Sub-Button", callback_data=f"a:custom_buttons:add_button:{button_id}")])
     rows.append([InlineKeyboardButton("🗑️ Delete This Button", callback_data=f"a:custom_buttons:delete:{button_id}")])
     
-    # Content management
-    rows.append([InlineKeyboardButton("📝 Add Text Content", callback_data=f"a:custom_content_type:text:{button_id}")])
-    rows.append([InlineKeyboardButton("📎 Add Document Content", callback_data=f"a:custom_content_type:document:{button_id}")])
+    # Content management - single row for adding content
+    content_row = []
+    content_row.append(InlineKeyboardButton("📝 Add Text", callback_data=f"a:custom_content_type:text:{button_id}"))
+    content_row.append(InlineKeyboardButton("📎 Add Document", callback_data=f"a:custom_content_type:document:{button_id}"))
+    rows.append(content_row)
     
-    # Show existing content with delete options
+    # Show content summary and management in a compact way
     if content_items:
-        rows.append([InlineKeyboardButton("📋 Current Content:", callback_data="noop")])
-        for item in content_items:
-            content_type = item['content_type']
-            if content_type == 'text':
-                preview = item['content_text'][:30] + "..." if item['content_text'] and len(item['content_text']) > 30 else (item['content_text'] or "Empty text")
-                rows.append([InlineKeyboardButton(f"❌ Delete Text: {preview}", callback_data=f"a:custom_content_delete:{item['id']}")])
-            elif content_type == 'document':
-                file_type = item['file_type'] or 'Document'
-                rows.append([InlineKeyboardButton(f"❌ Delete {file_type}", callback_data=f"a:custom_content_delete:{item['id']}")])
+        # Group content by type for display
+        text_count = sum(1 for item in content_items if item['content_type'] == 'text')
+        doc_count = sum(1 for item in content_items if item['content_type'] == 'document')
+        
+        content_info = f"Content: {text_count} text, {doc_count} documents"
+        rows.append([InlineKeyboardButton(f"📋 {content_info}", callback_data=f"a:custom_buttons:view_content:{button_id}")])
     
     # Sub-buttons management
     sub_buttons = get_custom_buttons(button_id)
     if sub_buttons:
-        rows.append([InlineKeyboardButton("👀 View Sub-Buttons", callback_data=f"a:custom_buttons:view:{button_id}")])
+        rows.append([InlineKeyboardButton(f"👀 View Sub-Buttons ({len(sub_buttons)})", callback_data=f"a:custom_buttons:view:{button_id}")])
     
     # Navigation
     parent_id = button['parent_id']
@@ -1632,9 +1632,54 @@ async def custom_button_manage_panel(q, button_id):
         f"🛠️ Managing: *{button['button_text']}*\n\n"
         "You can:\n"
         "• Edit button name\n"
-        "• Add/delete content\n"
+        "• Add sub-buttons\n"
+        "• Add text or document content\n"
         "• Delete this button\n\n"
         "*All content will be sent together when users click this button.*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+# custom buttons content panel function
+async def custom_button_content_panel(q, button_id):
+    """Panel to view and manage content for a button"""
+    uid = q.from_user.id
+    if not is_owner(uid):
+        await notify_owner_unauthorized(q.bot, uid, "custom_button_content_panel")
+        return
+    
+    button = get_custom_button(button_id)
+    if not button:
+        await q.message.edit_text("Button not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:custom_buttons")]]))
+        return
+    
+    content_items = get_custom_button_content(button_id)
+    
+    rows = []
+    
+    if content_items:
+        for i, item in enumerate(content_items, 1):
+            if item['content_type'] == 'text':
+                preview = item['content_text'][:50] + "..." if item['content_text'] and len(item['content_text']) > 50 else (item['content_text'] or "Empty text")
+                rows.append([InlineKeyboardButton(f"❌ {i}. Text: {preview}", callback_data=f"a:custom_content_delete:{item['id']}")])
+            elif item['content_type'] == 'document':
+                file_type = item['file_type'] or 'Document'
+                rows.append([InlineKeyboardButton(f"❌ {i}. {file_type}", callback_data=f"a:custom_content_delete:{item['id']}")])
+    else:
+        rows.append([InlineKeyboardButton("No content available", callback_data="noop")])
+    
+    # Action buttons
+    rows.append([
+        InlineKeyboardButton("📝 Add Text", callback_data=f"a:custom_content_type:text:{button_id}"),
+        InlineKeyboardButton("📎 Add Document", callback_data=f"a:custom_content_type:document:{button_id}")
+    ])
+    
+    # Navigation
+    rows.append([InlineKeyboardButton("⬅️ Back to Management", callback_data=f"a:custom_buttons:manage:{button_id}")])
+    
+    await q.message.edit_text(
+        f"📋 Content for: *{button['button_text']}*\n\n"
+        "Click on any item to delete it:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(rows)
     )
@@ -2073,6 +2118,11 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
             elif action == "manage":
                 await custom_button_manage_panel(q, button_id)
+        return
+
+    if act.startswith("custom_buttons:view_content:"):
+        button_id = int(act.split(":")[2])
+        await custom_button_content_panel(q, button_id)
         return
 
     if act.startswith("custom_content_type:"):
@@ -2732,21 +2782,22 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         log.error(f"Error sending content: {e}")
                         continue
                 
+                # REMOVED: The extra message that says "📚 Content from: ..."
+                # Just show the menu again after sending content
                 if sent_count > 0:
-                    # Only show menu after sending all content
                     await q.message.reply_text(
-                        f"📚 Content from: {button['button_text']}",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:back")]])
+                        "What would you like to do next?",
+                        reply_markup=main_menu(uid)
                     )
                 else:
                     await q.message.edit_text(
                         "❌ Could not load content. Please try again.",
-                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:back")]])
+                        reply_markup=main_menu(uid)
                     )
             else:
                 await q.message.edit_text(
                     "No content available for this button yet.",
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:back")]])
+                    reply_markup=main_menu(uid)
                 )
         return
 
