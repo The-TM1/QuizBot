@@ -1594,11 +1594,8 @@ async def custom_button_manage_panel(q, button_id):
         await q.message.edit_text("Button not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:custom_buttons")]]))
         return
     
-    # Get all content for this button
-    content_items = conn.execute(
-        "SELECT id, content_type, content_text, file_type FROM custom_buttons WHERE id=? AND content_type IS NOT NULL",
-        (button_id,)
-    ).fetchall()
+    # Get all content for this button from the correct table
+    content_items = get_custom_button_content(button_id)
     
     rows = []
     
@@ -1616,11 +1613,11 @@ async def custom_button_manage_panel(q, button_id):
         for item in content_items:
             content_type = item['content_type']
             if content_type == 'text':
-                preview = item['content_text'][:30] + "..." if len(item['content_text']) > 30 else item['content_text']
-                rows.append([InlineKeyboardButton(f"❌ Delete Text: {preview}", callback_data=f"a:custom_content_delete:text:{button_id}")])
+                preview = item['content_text'][:30] + "..." if item['content_text'] and len(item['content_text']) > 30 else (item['content_text'] or "Empty text")
+                rows.append([InlineKeyboardButton(f"❌ Delete Text: {preview}", callback_data=f"a:custom_content_delete:{item['id']}")])
             elif content_type == 'document':
                 file_type = item['file_type'] or 'Document'
-                rows.append([InlineKeyboardButton(f"❌ Delete {file_type}", callback_data=f"a:custom_content_delete:document:{button_id}")])
+                rows.append([InlineKeyboardButton(f"❌ Delete {file_type}", callback_data=f"a:custom_content_delete:{item['id']}")])
     
     # Sub-buttons management
     sub_buttons = get_custom_buttons(button_id)
