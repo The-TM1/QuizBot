@@ -119,6 +119,20 @@ def db_init():
             sort_order INTEGER DEFAULT 0
         );
     """)
+    # Content Management System Tables
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS content_buttons(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parent_id INTEGER DEFAULT 0,
+            button_text TEXT NOT NULL,
+            button_type TEXT NOT NULL, -- 'menu', 'text', 'document'
+            content_text TEXT,
+            file_id TEXT,
+            file_name TEXT,
+            sort_order INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL
+        );
+    """)
     conn.commit()
     # migrations (idempotent)
     _add_col("quizzes", "explanation", "TEXT")
@@ -186,6 +200,74 @@ def get_button_path(button_id):
         else:
             break
     return " › ".join(path)
+
+# ------------ Content Management Helpers ------------
+def get_content_buttons(parent_id=0):
+    """Get all buttons for a parent menu"""
+    return conn.execute(
+        "SELECT * FROM content_buttons WHERE parent_id=? ORDER BY sort_order, id",
+        (parent_id,)
+    ).fetchall()
+
+def get_content_button(button_id):
+    """Get a specific button by ID"""
+    return conn.execute(
+        "SELECT * FROM content_buttons WHERE id=?",
+        (button_id,)
+    ).fetchone()
+
+def add_content_button(parent_id, button_text, button_type, content_text=None, file_id=None, file_name=None):
+    """Add a new content button"""
+    conn.execute(
+        "INSERT INTO content_buttons (parent_id, button_text, button_type, content_text, file_id, file_name, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (parent_id, button_text, button_type, content_text, file_id, file_name, 0, int(time.time()))
+    )
+    conn.commit()
+    return conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+def update_content_button(button_id, button_text=None, content_text=None, file_id=None, file_name=None):
+    """Update a content button"""
+    if button_text and content_text:
+        conn.execute(
+            "UPDATE content_buttons SET button_text=?, content_text=? WHERE id=?",
+            (button_text, content_text, button_id)
+        )
+    elif button_text:
+        conn.execute(
+            "UPDATE content_buttons SET button_text=? WHERE id=?",
+            (button_text, button_id)
+        )
+    elif content_text:
+        conn.execute(
+            "UPDATE content_buttons SET content_text=? WHERE id=?",
+            (content_text, button_id)
+        )
+    elif file_id and file_name:
+        conn.execute(
+            "UPDATE content_buttons SET file_id=?, file_name=? WHERE id=?",
+            (file_id, file_name, button_id)
+        )
+    conn.commit()
+
+def delete_content_button(button_id):
+    """Delete a content button and its children"""
+    # First delete all children
+    conn.execute("DELETE FROM content_buttons WHERE parent_id=?", (button_id,))
+    # Then delete the button itself
+    conn.execute("DELETE FROM content_buttons WHERE id=?", (button_id,))
+    conn.commit()
+
+def get_button_tree(button_id):
+    """Get the full hierarchy of a button"""
+    tree = []
+    current = get_content_button(button_id)
+    while current:
+        tree.insert(0, current)
+        if current["parent_id"] > 0:
+            current = get_content_button(current["parent_id"])
+        else:
+            break
+    return tree
 
 # Add this in the "Helpers" section after the existing functions
 def _collect_valid_quiz_ids_all_subjects_mixed(ai: bool):
@@ -435,19 +517,19 @@ def main_menu(uid: int):
         [InlineKeyboardButton("ℹ️ Help", callback_data="u:help")]
     ]
     
-    # Add custom buttons
-    custom_buttons = get_custom_buttons(0)
-    for btn in custom_buttons:
-        rows.insert(1, [InlineKeyboardButton(btn["button_text"], callback_data=f"cb:{btn['id']}")])
-    
+    # Check if there are any content buttons
+    content_buttons = get_content_buttons(0)
+    if content_buttons:
+        rows.insert(1, [InlineKeyboardButton("📚 Study Materials", callback_data="u:content:main")])
+        
     if has_ai_quizzes():
-        rows.insert(1, [InlineKeyboardButton("🤖 AI Gen Quiz", callback_data="uai:start")])
+        rows.insert(2, [InlineKeyboardButton("🤖 AI Gen Quiz", callback_data="uai:start")])
     if is_admin(uid):
-        rows.insert(1, [InlineKeyboardButton("🛠 Admin panel", callback_data="a:panel")])
+        rows.insert(2, [InlineKeyboardButton("🛠 Admin panel", callback_data="a:panel")])
     if is_owner(uid):
-        rows[1].insert(0, InlineKeyboardButton("🏆 Leaderboard", callback_data="u:lb"))
+        rows[2].insert(0, InlineKeyboardButton("🏆 Leaderboard", callback_data="u:lb"))
     return InlineKeyboardMarkup(rows)
-
+    
 def admin_menu(uid: int):
     if not is_owner(uid):
         return InlineKeyboardMarkup([
@@ -463,8 +545,8 @@ def admin_menu(uid: int):
          InlineKeyboardButton("#️⃣ Count", callback_data="a:count")],
         [InlineKeyboardButton("📣 Broadcast", callback_data="a:broadcast"),
          InlineKeyboardButton("🔎 Search Quiz id", callback_data="a:search_id")],
-        [InlineKeyboardButton("🗑️ Delete Quizzes", callback_data="a:delete_quizzes")],  # NEW
-        [InlineKeyboardButton("🆕 Add New Button", callback_data="a:custom_buttons")],  # NEW
+        [InlineKeyboardButton("🔍 Mass Check Polls", callback_data="a:mass_check")],
+        [InlineKeyboardButton("📚 Content Manager", callback_data="a:content_manager")],  # NEW BUTTON
         [InlineKeyboardButton("👑 Admins", callback_data="a:admins"),
          InlineKeyboardButton("👥 Users", callback_data="a:users")],
         [InlineKeyboardButton("🗂 Export users DB", callback_data="a:export_users"),
@@ -1551,7 +1633,131 @@ async def custom_buttons_panel(q, parent_id=0):
         f"{title}\n\nManage custom buttons for the main menu.",
         reply_markup=InlineKeyboardMarkup(rows)
     )
+    
+# user content display functions
+async def show_user_content_menu(q, parent_id=0):
+    """Show content menu to users"""
+    buttons = get_content_buttons(parent_id)
+    
+    if not buttons:
+        await q.message.edit_text(
+            "No content available yet.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
+        )
+        return
+    
+    rows = []
+    for button in buttons:
+        icon = "📁" if button["button_type"] == "menu" else "📝" if button["button_type"] == "text" else "📎"
+        rows.append([InlineKeyboardButton(f"{icon} {button['button_text']}", callback_data=f"u:content:view:{button['id']}")])
+    
+    # Add back button if not at root
+    if parent_id > 0:
+        parent_button = get_content_button(parent_id)
+        if parent_button:
+            grandparent_id = parent_button["parent_id"]
+            rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"u:content:view:{grandparent_id}" if grandparent_id > 0 else "u:content:main")])
+    else:
+        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="u:back")])
+    
+    await q.message.edit_text(
+        "📚 Study Materials\n\nSelect an item:",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
 
+async def handle_user_content_button(q, context, button_id):
+    """Handle when user clicks a content button"""
+    button = get_content_button(button_id)
+    
+    if not button:
+        await q.message.edit_text("Content not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:content:main")]]))
+        return
+    
+    if button["button_type"] == "menu":
+        # Show sub-menu
+        await show_user_content_menu(q, button_id)
+        
+    elif button["button_type"] == "text":
+        # Send text content as a message
+        await q.message.edit_text("Sending content...")
+        await context.bot.send_message(
+            q.message.chat.id,
+            button["content_text"],
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:content:main")]])
+        )
+        
+    elif button["button_type"] == "document":
+        # Send document
+        await q.message.edit_text("Sending document...")
+        await context.bot.send_document(
+            q.message.chat.id,
+            button["file_id"],
+            caption=button["button_text"],
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Menu", callback_data="u:content:main")]])
+        )
+        
+#content management display functions
+async def show_content_manager(q, page=0):
+    """Show the main content management interface"""
+    buttons = get_content_buttons(0)  # Top level buttons
+    rows = []
+    
+    for button in buttons:
+        rows.append([InlineKeyboardButton(f"📁 {button['button_text']}", callback_data=f"a:content:view:{button['id']}")])
+    
+    # Add navigation buttons
+    rows.append([InlineKeyboardButton("➕ Add Main Menu", callback_data="a:content:add_menu")])
+    rows.append([InlineKeyboardButton("⬅️ Back to Admin", callback_data="a:panel")])
+    
+    await q.message.edit_text(
+        "📚 Content Management System\n\nManage your buttons and content:",
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
+async def show_content_button_details(q, button_id):
+    """Show details and options for a specific button"""
+    button = get_content_button(button_id)
+    children = get_content_buttons(button_id)
+    
+    # Build breadcrumb
+    tree = get_button_tree(button_id)
+    breadcrumb = " › ".join([b["button_text"] for b in tree])
+    
+    text = f"📁 {breadcrumb}\n\n"
+    
+    # Show button content if any
+    if button["button_type"] == "text" and button["content_text"]:
+        text += f"📝 Text Content: {button['content_text'][:100]}...\n\n"
+    elif button["button_type"] == "document" and button["file_name"]:
+        text += f"📎 Document: {button['file_name']}\n\n"
+    
+    text += "Options:"
+    
+    rows = []
+    
+    # Add sub-buttons if any
+    for child in children:
+        icon = "📁" if child["button_type"] == "menu" else "📝" if child["button_type"] == "text" else "📎"
+        rows.append([InlineKeyboardButton(f"{icon} {child['button_text']}", callback_data=f"a:content:view:{child['id']}")])
+    
+    # Action buttons
+    action_row = []
+    if button["button_type"] == "menu":
+        action_row.append(InlineKeyboardButton("➕ Add Sub Menu", callback_data=f"a:content:add_sub:{button_id}"))
+    
+    action_row.append(InlineKeyboardButton("📝 Add Text", callback_data=f"a:content:add_text:{button_id}"))
+    action_row.append(InlineKeyboardButton("📎 Add Document", callback_data=f"a:content:add_doc:{button_id}"))
+    rows.append(action_row)
+    
+    # Edit/Delete buttons
+    if button["button_type"] in ["text", "document"]:
+        rows.append([InlineKeyboardButton("✏️ Edit", callback_data=f"a:content:edit_text:{button_id}")])
+    
+    rows.append([InlineKeyboardButton("🗑️ Delete", callback_data=f"a:content:delete:{button_id}")])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="a:content:main")])
+    
+    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup(rows))
+    
 # ------------ Admin callbacks (includes Export fix & Search ID) ------------
 async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1994,6 +2200,84 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
+    # Content Management System admin callbacks
+    if act == "content_manager":
+        await show_content_manager(q, 0)
+        return
+
+    if act.startswith("content:"):
+        parts = act.split(":")
+        if len(parts) >= 2:
+            action = parts[1]
+            
+            if action == "main":
+                await show_content_manager(q, 0)
+                return
+                
+            elif action == "add_menu":
+                context.user_data["content_mode"] = "ADD_MENU"
+                context.user_data["content_parent_id"] = 0
+                await q.message.edit_text(
+                    "📁 Add Main Menu Button\n\nSend the button name:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:content:main")]])
+                )
+                return
+                
+            elif action.startswith("view:"):
+                button_id = int(action.split(":")[1])
+                await show_content_button_details(q, button_id)
+                return
+                
+            elif action.startswith("add_sub:"):
+                parent_id = int(action.split(":")[1])
+                context.user_data["content_mode"] = "ADD_SUB_MENU"
+                context.user_data["content_parent_id"] = parent_id
+                await q.message.edit_text(
+                    "📁 Add Sub Menu Button\n\nSend the button name:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:content:view:{parent_id}")]])
+                )
+                return
+                
+            elif action.startswith("add_text:"):
+                button_id = int(action.split(":")[1])
+                context.user_data["content_mode"] = "ADD_TEXT_CONTENT"
+                context.user_data["content_button_id"] = button_id
+                await q.message.edit_text(
+                    "📝 Add Text Content\n\nSend the text content:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:content:view:{button_id}")]])
+                )
+                return
+                
+            elif action.startswith("add_doc:"):
+                button_id = int(action.split(":")[1])
+                context.user_data["content_mode"] = "ADD_DOCUMENT_CONTENT"
+                context.user_data["content_button_id"] = button_id
+                await q.message.edit_text(
+                    "📎 Add Document\n\nSend the document/file:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:content:view:{button_id}")]])
+                )
+                return
+                
+            elif action.startswith("edit_text:"):
+                button_id = int(action.split(":")[1])
+                context.user_data["content_mode"] = "EDIT_TEXT_CONTENT"
+                context.user_data["content_button_id"] = button_id
+                button = get_content_button(button_id)
+                await q.message.edit_text(
+                    f"📝 Edit Text Content\n\nCurrent text:\n{button['content_text']}\n\nSend new text:",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:content:view:{button_id}")]])
+                )
+                return
+                
+            elif action.startswith("delete:"):
+                button_id = int(action.split(":")[1])
+                delete_content_button(button_id)
+                await q.message.edit_text(
+                    "✅ Button deleted successfully",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:content:main")]])
+                )
+                return
+
 # ------------ Command helpers: edit/del subject/chapter ------------
 async def _owner_required(update):
     if not is_owner(update.effective_user.id):
@@ -2232,6 +2516,64 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = None
         context.user_data["custom_button_edit"] = None
         await custom_buttons_panel(update, 0)
+        return
+
+    # Content Management System Handlers (text_or_poll)
+    if mode == "ADD_MENU" and update.message and update.message.text:
+        button_text = update.message.text.strip()
+        add_content_button(0, button_text, "menu")
+        await update.message.reply_text(
+            f"✅ Main menu button '{button_text}' added successfully",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back to Content Manager", callback_data="a:content:main")]])
+        )
+        context.user_data["content_mode"] = None
+        return
+
+    if mode == "ADD_SUB_MENU" and update.message and update.message.text:
+        button_text = update.message.text.strip()
+        parent_id = context.user_data.get("content_parent_id", 0)
+        add_content_button(parent_id, button_text, "menu")
+        await update.message.reply_text(
+            f"✅ Sub menu button '{button_text}' added successfully",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:content:view:{parent_id}")]])
+        )
+        context.user_data["content_mode"] = None
+        return
+
+    if mode == "ADD_TEXT_CONTENT" and update.message and update.message.text:
+        content_text = update.message.text.strip()
+        button_id = context.user_data.get("content_button_id")
+        update_content_button(button_id, content_text=content_text)
+        await update.message.reply_text(
+            f"✅ Text content added successfully",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:content:view:{button_id}")]])
+        )
+        context.user_data["content_mode"] = None
+        return
+
+    if mode == "EDIT_TEXT_CONTENT" and update.message and update.message.text:
+        content_text = update.message.text.strip()
+        button_id = context.user_data.get("content_button_id")
+        update_content_button(button_id, content_text=content_text)
+        await update.message.reply_text(
+            f"✅ Text content updated successfully",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:content:view:{button_id}")]])
+        )
+        context.user_data["content_mode"] = None
+        return
+
+    if mode == "ADD_DOCUMENT_CONTENT" and update.message and update.message.document:
+        button_id = context.user_data.get("content_button_id")
+        document = update.message.document
+        file_id = document.file_id
+        file_name = document.file_name
+        
+        update_content_button(button_id, file_id=file_id, file_name=file_name)
+        await update.message.reply_text(
+            f"✅ Document '{file_name}' added successfully",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:content:view:{button_id}")]])
+        )
+        context.user_data["content_mode"] = None
         return
 
     # admins add poll to selected subject/chapter
@@ -2605,6 +2947,16 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "No content available for this button yet.",
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])
                 )
+        return
+
+    # User Content System
+    if data == "u:content:main":
+        await show_user_content_menu(q, 0)
+        return
+
+    if data.startswith("u:content:view:"):
+        button_id = int(data.split(":")[2])
+        await handle_user_content_button(q, context, button_id)
         return
 
     # AI menu
