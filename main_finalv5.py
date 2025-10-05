@@ -1814,6 +1814,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
+    # ---- Mass Delete AI confirmation ----
     if act == "mass_del_ai_confirm":
         quiz_ids = context.user_data.get("pending_mass_delete_ai", [])
         if not quiz_ids:
@@ -1837,6 +1838,12 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         finally:
             context.user_data.pop("pending_mass_delete_ai", None)
+        return
+
+    if act == "mass_del_ai_cancel":
+        context.user_data.pop("pending_mass_delete_ai", None)
+        await q.message.edit_text("❌ Mass delete AI operation cancelled.", 
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
     if act == "mass_del_ai_cancel":
@@ -2383,6 +2390,82 @@ async def delsub_ai_cmd(update, context): await delsub(update, context, ai=True)
 async def delchap_cmd(update, context): await delchap(update, context, ai=False)
 async def delchap_ai_cmd(update, context): await delchap(update, context, ai=True)
 
+
+# ------------ Mass Delete AI Command ------------
+async def mass_del_ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mass delete AI quizzes by IDs"""
+    uid = update.effective_user.id
+    if not is_owner(uid):
+        await update.message.reply_text("👉 Owner only")
+        return
+        
+    if not context.args:
+        await update.message.reply_text(
+            "Usage: /mass_del_ai <quiz_id1> <quiz_id2> <quiz_id3> ...\n\n"
+            "Example: /mass_del_ai 3 2 67 32 12 54 63 64 21"
+        )
+        return
+        
+    try:
+        # Parse quiz IDs from arguments
+        quiz_ids = []
+        for arg in context.args:
+            try:
+                quiz_ids.append(int(arg.strip()))
+            except ValueError:
+                await update.message.reply_text(f"⚠️ Invalid quiz ID: {arg}")
+                return
+                
+        if not quiz_ids:
+            await update.message.reply_text("No valid quiz IDs provided.")
+            return
+            
+        # Check if all quizzes exist and are AI quizzes
+        placeholders = ','.join('?' * len(quiz_ids))
+        existing_quizzes = conn.execute(
+            f"SELECT id, subject, chapter, question FROM quizzes WHERE id IN ({placeholders}) AND ai_generated=1", 
+            quiz_ids
+        ).fetchall()
+        
+        existing_ids = [r['id'] for r in existing_quizzes]
+        non_existent_ids = set(quiz_ids) - set(existing_ids)
+        
+        if not existing_ids:
+            await update.message.reply_text("No matching AI quizzes found with the provided IDs.")
+            return
+            
+        # Show confirmation with details
+        quiz_list = "\n".join([f"• ID: {r['id']} - {r['subject']} › {r['chapter']}" for r in existing_quizzes[:10]])  # Limit to 10 for display
+        if len(existing_quizzes) > 10:
+            quiz_list += f"\n... and {len(existing_quizzes) - 10} more"
+        
+        message = f"🗑️ *Mass Delete AI Quizzes - Confirmation*\n\n"
+        message += f"Quizzes to delete: *{len(existing_ids)}*\n\n"
+        message += f"*List:*\n{quiz_list}\n\n"
+        
+        if non_existent_ids:
+            message += f"⚠️ *Not found or not AI quizzes ({len(non_existent_ids)}):* {', '.join(map(str, list(non_existent_ids)[:10]))}"
+            if len(non_existent_ids) > 10:
+                message += f" ... and {len(non_existent_ids) - 10} more"
+            message += "\n\n"
+            
+        message += "Are you sure you want to delete these AI quizzes? This action cannot be undone."
+        
+        # Store IDs for confirmation
+        context.user_data["pending_mass_delete_ai"] = existing_ids
+        
+        await update.message.reply_text(
+            message,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirm Delete", callback_data="a:mass_del_ai_confirm")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="a:mass_del_ai_cancel")]
+            ])
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {str(e)}")
+
 # ------------ Commands ------------
 
 async def done_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2403,7 +2486,7 @@ async def stop_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.execute("UPDATE sessions SET state='stopped' WHERE user_id=? AND state='running'", (uid,))
     conn.commit()
     await update.message.reply_text("Quiz stopped.", reply_markup=main_menu(uid))
-
+    
 # ------------ Keepalive (optional) ------------
 app = Flask(__name__)
 @app.get("/")
@@ -2431,7 +2514,8 @@ if __name__ == "__main__":
     app_.add_handler(CommandHandler("editchap_ai", editchap_ai_cmd))
     app_.add_handler(CommandHandler("delsub_ai", delsub_ai_cmd))
     app_.add_handler(CommandHandler("delchap_ai", delchap_ai_cmd))
-    app_.add_handler(CommandHandler("mass_del_ai", mass_del_ai_cmd))
+    # Mass delete AI command
+    app_.add_handler(CommandHandler("mass_del_ai", mass_del_ai_cmd))  # ADD THIS LINE
 
     app_.add_handler(CallbackQueryHandler(btn))
     app_.add_handler(PollAnswerHandler(poll_answer))
