@@ -1544,7 +1544,9 @@ async def custom_buttons_panel(q, parent_id=0):
     
     rows = []
     for btn in buttons:
-        has_content = " 📄" if btn['content_type'] else ""
+        # Check if button has content by querying the content table
+        content_items = get_custom_button_content(btn['id'])
+        has_content = " 📄" if content_items else ""
         has_children = " 📁" if get_custom_buttons(btn['id']) else ""
         button_text = f"{btn['button_text']}{has_content}{has_children}"
         
