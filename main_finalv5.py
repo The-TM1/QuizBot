@@ -10,7 +10,8 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 
-# ------------ Config / ENV ------------
+# ------------ Config / ENV (Configuration & Setup) ------------
+# Environment variables, constants, logging setup
 load_dotenv("secrets.env")
 OWNER_ID = os.getenv("ADMIN_ID")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
@@ -24,7 +25,7 @@ DEFAULT_OPEN_PERIOD = 30
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 log = logging.getLogger("quizbot")
 
-# ------------ Database ------------
+# ---------------- Database --------------------------------
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 conn.row_factory = sqlite3.Row
 conn.execute("PRAGMA journal_mode=WAL;")
@@ -115,7 +116,6 @@ def db_init():
             sort_order INTEGER DEFAULT 0
         );
     """)
-    
     c.execute("""
         CREATE TABLE IF NOT EXISTS custom_button_content(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -138,10 +138,10 @@ def db_init():
     _add_col("sessions", "current_index", "INTEGER DEFAULT 0")
     _add_col("sessions", "finished_at", "INTEGER")
 
-# ------------ Helpers ------------
+# ---------------- Helpers (Helper Funtions) --------------------------
 
 pending_contact = {}
-
+# Custom buttons management helper functions
 def get_custom_buttons(parent_id=0):
     """Get custom buttons by parent_id"""
     return conn.execute(
@@ -321,7 +321,8 @@ def upsert_user(update: Update):
         (u.id, u.username, u.first_name, u.last_name, c.id, int(time.time()))
     ); conn.commit()
     return not existed
-
+    
+# sanitization
 def sanitize_for_poll(q, options, expl):
     def trunc(s, n): 
         s = (s or "").strip()
@@ -432,7 +433,7 @@ def _count_valid_quizzes_all_chapters_mixed(subject: str, ai: bool):
     result = conn.execute(sql, (subject,)).fetchone()
     return result["count"] if result else 0
 
-# ------------ Data Views ------------
+# ------------ Data Views & Queries ----------------
 def list_subjects_with_counts(ai_only=False):
     if ai_only:
         cur = conn.execute("SELECT subject s, COUNT(DISTINCT chapter) chs, COUNT(*) qs "
@@ -454,7 +455,7 @@ def list_chapters_with_counts(subject, ai_only=False):
 def has_ai_quizzes():
     return conn.execute("SELECT 1 FROM quizzes WHERE ai_generated=1 LIMIT 1").fetchone() is not None
 
-# ------------ Menus ------------
+# ------------ Menus (menu system) --------------------
 def main_menu(uid: int):
     rows = [
         [InlineKeyboardButton("▶️ Start quiz", callback_data="u:start")],
@@ -501,7 +502,7 @@ def admin_menu(uid: int):
         [InlineKeyboardButton("⬅️ Back", callback_data="a:back")]
     ])
 
-# ------------ Basic Commands ------------
+# -------------- Basic Commands -----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_new = upsert_user(update)
     uid = update.effective_user.id
@@ -539,7 +540,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Use /stop to cancel anytime."
     )
 
-# ------------ User flow: Subjects & Chapters (Human + AI) ------------
+# -------- User flow / User Quiz Flow: Subjects & Chapters (Human + AI) ------------
 # Replace the existing user_subjects function with this:
 async def user_subjects(update: Update, page: int = 0):
     uid = update.effective_user.id if update.effective_user else update.callback_query.from_user.id
@@ -671,7 +672,7 @@ async def user_chapters_ai(update: Update, subject: str, page: int = 0):
     await edit_or_reply(update, f"AI Gen › Subjects › *{subject}*\n\nChoose a chapter:",
                         InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
-# ------------ UI helpers ------------
+# ------------ UI helpers ------------------
 async def edit_or_reply(obj, text, markup=None, **kwargs):
     if hasattr(obj, "callback_query") and obj.callback_query:
         await obj.callback_query.message.edit_text(text, reply_markup=markup, **kwargs)
@@ -755,6 +756,7 @@ async def pre_quiz_screen_ai(q, context: ContextTypes.DEFAULT_TYPE):
                                [InlineKeyboardButton("⬅️ Back", callback_data="uai:timerback")]])
     await q.message.edit_text(txt, reply_markup=kb)
 
+# -------------- Start sessions (Human & AI) -----------------
 # Replace the existing begin_quiz_session function with this:
 async def begin_quiz_session(q, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -1050,8 +1052,7 @@ async def begin_quiz_session_all_chapters_mixed_ai(q, context: ContextTypes.DEFA
         except Exception:
             pass
 
-# ------------ Start sessions ------------
-# --- validate & collect quiz ids before starting (handles bad data safely) ---
+# validate & collect quiz ids before starting (handles bad data safely)
 def _collect_valid_quiz_ids(subject: str, chapter: str, ai: bool):
     sql = "SELECT id, question, options_json, correct, explanation FROM quizzes WHERE subject=? AND chapter=? AND "
     sql += "ai_generated=1" if ai else "COALESCE(ai_generated,0)=0"
@@ -1207,7 +1208,7 @@ async def begin_quiz_session_ai(q, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# --- progress on answer; timer handled by fallback ---
+# progress on answer; timer handled by fallback
 async def poll_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ans = update.poll_answer
     pid = ans.poll_id
@@ -1321,7 +1322,7 @@ async def send_next_quiz(bot, session_id: int):
         except Exception:
             pass
 
-# ------------ Stats & Leaderboard (owner only) ------------
+# ------------ Stats & Leaderboard (owner only) ---------------
 async def show_stats(q):
     uid = q.from_user.id
     r = conn.execute(
@@ -1391,7 +1392,8 @@ async def leaderboard(q, page=0):
     rows_kb.append([InlineKeyboardButton("⬅️ Back", callback_data="u:back")])
     await q.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows_kb))
 
-# ------------ /delquiz with confirmation ------------
+# ------------ Quiz Deletion System ------------
+# /delquiz with confirmation
 async def delquiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not (is_owner(uid) or is_admin(uid)):
@@ -1424,7 +1426,7 @@ async def delquiz_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(txt, reply_markup=kb)
 
-# ------------ /delquiz_ai with confirmation (for AI quizzes) ------------
+# /delquiz_ai with confirmation (for AI quizzes)
 async def delquiz_ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if not (is_owner(uid) or is_admin(uid)):
@@ -1457,7 +1459,7 @@ async def delquiz_ai_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(txt, reply_markup=kb)
 
-# ------------ Export helpers ------------
+# ------------ Export System / Export helpers ------------
 def _export_items(where_sql: str = "", params: tuple = (), filename: str = "quizzes.json"):
     from io import BytesIO
     q = "SELECT * FROM quizzes"
@@ -1684,7 +1686,7 @@ async def custom_button_content_panel(q, button_id):
         reply_markup=InlineKeyboardMarkup(rows)
     )
 
-# ------------ Admin callbacks (includes Export fix & Search ID) ------------
+# ------------ Admin callbacks / admin_cb ------------
 async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer(cache_time=1)
@@ -1706,7 +1708,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if act == "back":
         await q.message.edit_text("Menu:", reply_markup=main_menu(uid)); return
 
-    # ---- add quiz (+ import inside chapter) ----
+    # add quiz (+ import inside chapter) -------
     if act == "add":
         subs = list_subjects_with_counts(ai_only=False)
         rows = [[InlineKeyboardButton(f"📚 {s} (chapters: {chs} | quizzes: {qs})", callback_data=f"a:add_subj:{s}")]
@@ -1770,7 +1772,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # ---- delete last ----
+    # delete last admin callbacks-----------
     if act == "dellast_yes":
         last = conn.execute("SELECT quiz_id FROM admin_log WHERE admin_id=? ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
         if not last:
@@ -1784,7 +1786,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                       reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
-    # ---- delete specific quiz (from /delquiz confirmation) ----
+    # delete specific quiz (from /delquiz confirmation) admin callbacks------
     if act.startswith("delquiz:"):
         qid = int(act.split(":")[1])
         # Verify the quiz still exists and user still has permission
@@ -1809,7 +1811,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
-    # ---- delete specific AI quiz (from /delquiz_ai confirmation) ----
+    # delete specific AI quiz (from /delquiz_ai confirmation) admin callbacks------
     if act.startswith("delquiz_ai:"):
         qid = int(act.split(":")[1])
         # Verify the AI quiz still exists and user still has permission
@@ -1834,7 +1836,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
-    # ---- export menus/actions (FIXED chapter parser) ----
+    # export menus/actions (FIXED chapter parser) admin callbacks-------------
     if act == "export_menu":
         subs = conn.execute("SELECT DISTINCT subject FROM quizzes WHERE subject IS NOT NULL").fetchall()
         rows = [[InlineKeyboardButton("📤 Export all", callback_data="a:export_all")]]
@@ -1871,7 +1873,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bio = _export_items("subject=? AND chapter=?", (subj, chap), filename=f"quizzes_{subj}_{chap}.json")
         await q.message.reply_document(bio, caption=f"Exported: {subj} › {chap}"); return
 
-    # ---- users & messaging ----
+    # users & messaging admin callbacks----------
     if act == "users": await users_panel(q, page=0); return
     if act.startswith("users:p:"):
         pg = int(act.split(":")[2]); await users_panel(q, page=pg); return
@@ -1895,7 +1897,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data=f"a:users:view:{tgt}")]]))
         return
 
-    # ---- admins (owner only) ----
+    # admins (owner only) admin callbacks----------
     if act == "admins":
         ids = sorted(list(admin_ids_from_settings()))
         if OWNER_ID in ids: ids.remove(OWNER_ID)
@@ -1928,7 +1930,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.message.edit_text("Removed.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:admins")]]))
         return
 
-    # ---- counters / broadcast / users DB / AI import / search id / Delete Quizzes / custom buttons ----
+    # counters / broadcast / users DB / AI import / search id / Delete Quizzes / custom buttons admin callbacks--------
     if act == "count":
         r = conn.execute("SELECT COUNT(*) c FROM quizzes").fetchone()
         await q.message.edit_text(f"Total quizzes: {r['c']}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
@@ -1960,7 +1962,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
-    # Delete Quizzes admin callbacks
+    # Delete Quizzes admin callbacks -----
     if act == "delete_quizzes":
         context.user_data["mode"] = "DELETE_QUIZZES"
         context.user_data["delete_quizzes_polls"] = []
@@ -2069,7 +2071,7 @@ async def admin_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="a:panel")]]))
         return
 
-    # custom buttons admin callbacks
+    # custom buttons admin callbacks-------
     if act == "custom_buttons":
         await custom_buttons_panel(q, 0)
         return
@@ -2227,7 +2229,7 @@ async def delchap(update: Update, context: ContextTypes.DEFAULT_TYPE, ai=False):
     conn.commit()
     await update.message.reply_text(f"Deleted {subj} › {chap} ({cnt} quizzes) ({'AI' if ai else 'Human'}).")
 
-# ------------ Text / Poll handler (modes incl. SEARCH_ID) ------------
+# ------------ Text / Poll handler / text_or_poll ------------
 async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(update)
     uid = update.effective_user.id
@@ -2238,7 +2240,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("You are banned from using this bot.")
         return
 
-    # SEARCH QUIZ ID
+    # SEARCH QUIZ ID (text_or_poll)-----
     if mode == "SEARCH_ID" and update.message:
         if not is_owner(uid):
             await notify_owner_unauthorized(context.bot, uid, "SEARCH_ID"); 
@@ -2282,7 +2284,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = None
         return
 
-    # Delete quizzes polls collection
+    # Delete quizzes polls collection (text_or_poll)-----
     if mode == "DELETE_QUIZZES" and update.message and update.message.poll:
         if not is_owner(uid):
             await notify_owner_unauthorized(context.bot, uid, "DELETE_QUIZZES_POLL")
@@ -2310,7 +2312,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # No confirmation message - just silently collect
         return
 
-    # Custom buttons (text_or_poll)
+    # Custom buttons (text_or_poll)-------------------
     # Custom buttons - add button
     if mode == "CUSTOM_BUTTON_ADD" and update.message and update.message.text:
         if not is_owner(uid):
@@ -2391,7 +2393,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await custom_button_manage_panel(update, button_id)
         return
 
-    # owner sends message to specific user
+    # owner sends message to specific user (text_or_poll)------
     if mode == "MSG_USER" and update.message and update.message.text:
         if not is_owner(uid):
             await notify_owner_unauthorized(context.bot, uid, "MSG_USER", update.message.text)
@@ -2410,7 +2412,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = None
         return
 
-    # admins add poll to selected subject/chapter
+    # admins add poll to selected subject/chapter (text_or_poll)----
     if mode == "ADDING" and update.message and update.message.poll:
         if not is_admin(uid):
             await notify_owner_unauthorized(context.bot, uid, "ADDING_POLL"); return
@@ -2439,7 +2441,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Add error: {e}")
         return
 
-    # global import (owner menu "Import JSON")
+    # global import (owner menu "Import JSON") (text_or_poll)------------------
     if mode == "IMPORT" and update.message and update.message.document:
         if not is_owner(uid):
             await notify_owner_unauthorized(context.bot, uid, "IMPORT", update.message.document.file_name)
@@ -2545,7 +2547,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["mode"] = None
         return
 
-    # broadcast
+    # broadcast system (text_or_poll)----
     # broadcast (two-step: preview then confirm)
     if mode == "BROADCAST_ENTER" and update.message and update.message.text:
         if not is_owner(uid):
@@ -2562,7 +2564,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = None
         return
 
-    # contact admin → owner only
+    # contact admin → owner only (text_or_poll)-----
     logging.info(f"[contact-debug] text_or_poll called; uid={uid}; msg={(update.message.text if update.message else None)}")
     if pending_contact.get(uid) and update.message:
         u = update.effective_user
@@ -2589,8 +2591,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # admins add subject/chapter by text# admins add subject/chapter by text
-
+    # admins add subject/chapter by text (text_or_poll)----
     if mode == "NEW_SUBJECT" and update.message and update.message.text:
         context.user_data["add_subject"] = update.message.text.strip()
         context.user_data["mode"] = None
@@ -2615,7 +2616,7 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # owner add admin (by id or @username)
+    # owner add admin (by id or @username) (text_or_poll)----
     if mode == "ADMINS_ADD_PROMPT" and update.message and update.message.text:
         if not is_owner(uid):
             await notify_owner_unauthorized(context.bot, uid, "ADMINS_ADD_PROMPT"); return
@@ -2635,13 +2636,13 @@ async def text_or_poll(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = None
         return
 
-# ------------ Buttons dispatcher ------------
+# ------------ Buttons dispatcher / btn() ----------------
 async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     upsert_user(update)
     q = update.callback_query
     await q.answer(cache_time=1)
     uid = q.from_user.id
-    # --- handle broadcast confirm/cancel quickly (works even if admin_cb dispatch had issues) ---
+    # handle broadcast confirm/cancel quickly (works even if admin_cb dispatch had issues) btn() ----
     if q.data == "a:bcast_confirm":
         # allow only admins
         if not is_owner(q.from_user.id):
@@ -2682,7 +2683,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.edit_text("You are banned from using this bot.")
         return
 
-    # user menu
+    # user menu btn()----
     if data == "u:help":
         await q.message.edit_text("Start → Subject → Chapter → Timer (or Without Timer) → I am ready!",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])); return
@@ -2697,7 +2698,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.message.edit_text("Type your message for the owner:",
                                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="u:back")]])); return
 
-    # start quiz (human)
+    # start quiz (human) btn()-----
     if data == "u:start": await user_subjects(update); return
     if data.startswith("u:subjp:"): await user_subjects(update, int(data.split(":")[2])); return
     if data.startswith("u:subj:"):
@@ -2732,7 +2733,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["chapter"] = "ALL_CHAPTERS_MIXED"
         await timer_menu(update); return
 
-    # Custom buttons for users
+    # Custom buttons for users btn()------------
     if data.startswith("cb:"):
         button_id = int(data.split(":")[1])
         button = get_custom_button(button_id)
@@ -2801,7 +2802,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         return
 
-    # AI menu
+    # AI menu btn()---------
     if data == "uai:start": await user_subjects_ai(update); return
     if data.startswith("uai:subjp:"): await user_subjects_ai(update, int(data.split(":")[2])); return
     if data.startswith("uai:subj:"):
@@ -2827,7 +2828,7 @@ async def btn(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["ai_chapter"] = "ALL_CHAPTERS_MIXED"
         await timer_menu_ai(update); return
 
-    # admin dispatch
+    # admin dispatch btn()----
     if data.startswith("a:"):
         if not is_admin(uid):
             await notify_owner_unauthorized(context.bot, uid, f"callback:{data}")
